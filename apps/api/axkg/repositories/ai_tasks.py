@@ -1,0 +1,170 @@
+"""ai_tasks repository (AXKG-SPEC-011/002).
+
+- 실패 task는 불변: 상태 전이는 queued→running→succeeded|failed|cancelled 방향으로만.
+- 재시도는 retry_of_task_id로 원 task를 참조하는 새 row (create로 만든다).
+"""
+import uuid
+from typing import Any
+
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from axkg.dto.ai import AiTaskDTO
+from axkg.models import AiTask
+from axkg.models.base import utcnow
+
+
+def _to_dto(row: AiTask) -> AiTaskDTO:
+    return AiTaskDTO(
+        id=row.id,
+        task_type=row.task_type,
+        task_definition_id=row.task_definition_id,
+        status=row.status,
+        source_id=row.source_id,
+        gate_id=row.gate_id,
+        revision_id=row.revision_id,
+        retry_of_task_id=row.retry_of_task_id,
+        retry_count=row.retry_count,
+        provider=row.provider,
+        model=row.model,
+        options=row.options or {},
+        provider_options=row.provider_options or {},
+        open_kknaks_task_id=row.open_kknaks_task_id,
+        open_kknaks_session_id=row.open_kknaks_session_id,
+        prompt_version_id=row.prompt_version_id,
+        template_version_id=row.template_version_id,
+        payload=row.payload or {},
+        error_code=row.error_code,
+        error_message=row.error_message,
+        queued_at=row.queued_at,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+    )
+
+
+class AiTaskRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def _get_row(self, task_id: uuid.UUID) -> AiTask:
+        row = await self._session.get(AiTask, task_id)
+        if row is None:
+            raise LookupError(f"ai_task not found: {task_id}")
+        return row
+
+    async def create(
+        self,
+        *,
+        task_type: str,
+        task_definition_id: uuid.UUID | None,
+        provider: str,
+        model: str | None,
+        options: dict[str, Any],
+        provider_options: dict[str, Any],
+        source_id: uuid.UUID | None = None,
+        gate_id: uuid.UUID | None = None,
+        revision_id: uuid.UUID | None = None,
+        retry_of_task_id: uuid.UUID | None = None,
+        retry_count: int = 0,
+        payload: dict[str, Any] | None = None,
+    ) -> AiTaskDTO:
+        row = AiTask(
+            task_type=task_type,
+            task_definition_id=task_definition_id,
+            status="queued",
+            source_id=source_id,
+            gate_id=gate_id,
+            revision_id=revision_id,
+            retry_of_task_id=retry_of_task_id,
+            retry_count=retry_count,
+            provider=provider,
+            model=model,
+            options=options,
+            provider_options=provider_options,
+            payload=payload or {},
+            queued_at=utcnow(),
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def get(self, task_id: uuid.UUID) -> AiTaskDTO | None:
+        row = await self._session.get(AiTask, task_id)
+        return _to_dto(row) if row is not None else None
+
+    async def set_assembly_snapshot(
+        self,
+        task_id: uuid.UUID,
+        *,
+        prompt_version_id: uuid.UUID | None,
+        template_version_id: uuid.UUID | None,
+        payload: dict[str, Any],
+    ) -> AiTaskDTO:
+        """조립 입력 스냅샷 — fallback 실행은 버전 id를 null로 두고 payload에 기록."""
+        row = await self._get_row(task_id)
+        row.prompt_version_id = prompt_version_id
+        row.template_version_id = template_version_id
+        row.payload = payload
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def mark_running(self, task_id: uuid.UUID) -> AiTaskDTO:
+        row = await self._get_row(task_id)
+        row.status = "running"
+        row.started_at = utcnow()
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def set_open_kknaks_refs(
+        self,
+        task_id: uuid.UUID,
+        *,
+        open_kknaks_task_id: str | None,
+        open_kknaks_session_id: str | None,
+    ) -> AiTaskDTO:
+        row = await self._get_row(task_id)
+        row.open_kknaks_task_id = open_kknaks_task_id
+        row.open_kknaks_session_id = open_kknaks_session_id
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def mark_succeeded(self, task_id: uuid.UUID) -> AiTaskDTO:
+        row = await self._get_row(task_id)
+        row.status = "succeeded"
+        row.finished_at = utcnow()
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def mark_failed(
+        self, task_id: uuid.UUID, *, error_code: str, error_message: str | None
+    ) -> AiTaskDTO:
+        row = await self._get_row(task_id)
+        row.status = "failed"
+        row.error_code = error_code
+        row.error_message = error_message
+        row.finished_at = utcnow()
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def get_retry_chain(self, task_id: uuid.UUID) -> list[AiTaskDTO]:
+        """task가 속한 재시도 체인 전체를 queued_at 오름차순으로 반환.
+
+        retry_of_task_id를 따라 root까지 올라간 뒤 후손을 레벨 단위로 수집한다
+        (체인은 짧다는 전제의 단순 반복 조회).
+        """
+        current = await self._get_row(task_id)
+        while current.retry_of_task_id is not None:
+            current = await self._get_row(current.retry_of_task_id)
+
+        chain: list[AiTask] = [current]
+        frontier: list[uuid.UUID] = [current.id]
+        while frontier:
+            rows = (
+                await self._session.scalars(
+                    sa.select(AiTask).where(AiTask.retry_of_task_id.in_(frontier))
+                )
+            ).all()
+            chain.extend(rows)
+            frontier = [row.id for row in rows]
+        chain.sort(key=lambda row: (row.queued_at, row.retry_count))
+        return [_to_dto(row) for row in chain]

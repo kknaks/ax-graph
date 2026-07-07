@@ -1,8 +1,20 @@
-.DS_Store
+# node
 node_modules/
+.next/
+out/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# env
 .env
 .env.local
-dist/
-build/
-.next/
-coverage/
+
+# runtime markdown root (experimental only)
+data/documents/*
+!data/documents/.gitkeep
+
+.DS_Store

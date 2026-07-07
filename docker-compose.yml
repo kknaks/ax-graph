@@ -1,0 +1,94 @@
+# AXKG — postgres + redis + api + open-kknaks worker
+# 포트 컨벤션 — 4-prefix (사용자 컨벤션). 기존 kknaks 스택(48000/46379)과 충돌 없게 배정.
+# 환경 변수는 전부 .env 소유 (.env.example 참고). compose에는 배선만 남긴다.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: axkg-postgres
+    ports:
+      - "45432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-axkg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-axkg}
+      POSTGRES_DB: ${POSTGRES_DB:-axkg}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-axkg} -d ${POSTGRES_DB:-axkg}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: axkg-redis
+    ports:
+      - "46380:6379"                          # 호스트 포트 4-prefix, 컨테이너 내부는 기본 6379
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  api:
+    build:
+      context: apps/api
+    container_name: axkg-api
+    ports:
+      - "48100:8000"
+    command: sh -c "alembic upgrade head && uvicorn axkg.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - .env
+    volumes:
+      # Markdown SoT root — 기본은 레포 로컬 실험용, 운영은 .env에서 knowledge workspace 경로 지정
+      - ${AXKG_WORKSPACE_HOST_PATH:-./data/documents}:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: apps/worker
+    container_name: axkg-worker
+    env_file:
+      - .env
+    environment:
+      # env_file은 ${} 치환이 안 되므로 PATH만 compose 레벨에서 조립
+      # 호스트 path 그대로 컨테이너 안에서도 매핑 — npm symlink/require 깨짐 회피
+      PATH: ${CLAUDE_LOCAL_DIR:-/home/kknaks/.local}/bin:/usr/local/bin:/usr/bin:/bin
+    volumes:
+      # 호스트의 system claude (npm install -g 결과) 를 그대로 mount
+      - ${CLAUDE_LOCAL_DIR:-/home/kknaks/.local}:${CLAUDE_LOCAL_DIR:-/home/kknaks/.local}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    profiles: ["web"]                          # 로컬은 보통 `npm run dev` 직접 실행 — 필요 시에만
+    image: node:20-alpine
+    container_name: axkg-web
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "43000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./apps/web:/app
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
