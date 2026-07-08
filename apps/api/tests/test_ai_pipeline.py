@@ -36,6 +36,7 @@ from axkg.services.ai.fallbacks import (
     PROMPT_FALLBACK_USED,
     TEMPLATE_FALLBACK_USED,
 )
+from axkg.services.ai.pipeline import strip_code_fences
 
 VALID_SUMMARY_OUTPUT = {
     "title": "Graph RAG 실전 설계",
@@ -125,7 +126,7 @@ async def test_execute_success_snapshots_and_consumes_output(
         # SPEC-007 MVP 기본값이 생성 시점에 스냅샷된다
         assert task.provider == "claude"
         assert task.options["timeout_sec"] == 300
-        assert task.provider_options == {"max_turns": 3, "effort": "medium"}
+        assert task.provider_options == {"max_turns": 6, "effort": "medium"}
 
         done = await service.execute_task(task.id)
         await session.commit()
@@ -178,6 +179,35 @@ async def test_output_parse_failure_marks_failed(
         assert dummy.results == []  # 어떤 필드도 소비하지 않는다
         # 실패 task도 요청/조립 스냅샷은 payload에 보존된다 (SPEC-002)
         assert "assembled_input" in failed.payload
+
+
+def test_strip_code_fences_variants() -> None:
+    # ```json … ``` (agentic claude가 흔히 내는 형태) → 내부 JSON만
+    fenced = '```json\n{"a": 1}\n```'
+    assert strip_code_fences(fenced) == '{"a": 1}'
+    # 언어 태그 없는 펜스도 벗긴다
+    assert strip_code_fences("```\n{\"a\": 1}\n```") == '{"a": 1}'
+    # 펜스가 없으면 원문 그대로 (내부 백틱은 건드리지 않음)
+    assert strip_code_fences('{"a": 1}') == '{"a": 1}'
+    assert strip_code_fences('{"md": "a ``` b"}') == '{"md": "a ``` b"}'
+
+
+async def test_fenced_json_output_parses_and_consumes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """```json 펜스로 감싼 출력도 파싱·소비된다 (agentic 실행 출력 정규화)."""
+    async with session_factory() as session:
+        fenced = "```json\n" + json.dumps(VALID_SUMMARY_OUTPUT) + "\n```"
+        client = FakeOpenKknaksClient(result_text=fenced)
+        dummy = DummyContextBuilder()
+        service = make_service(session, client, dummy)
+
+        task = await service.create_task("collect_source_summary")
+        done = await service.execute_task(task.id)
+        await session.commit()
+
+        assert done.status == "succeeded"
+        assert dummy.results == [(done, VALID_SUMMARY_OUTPUT)]
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +405,7 @@ def test_resolution_defaults_without_settings() -> None:
     assert config.provider == "claude"
     assert config.model is None
     assert config.options == {"timeout_sec": 300, "resume": False}
-    assert config.provider_options == {"max_turns": 3, "effort": "medium"}
+    assert config.provider_options == {"max_turns": 6, "effort": "medium"}
 
 
 # ---------------------------------------------------------------------------

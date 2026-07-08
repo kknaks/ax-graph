@@ -17,7 +17,7 @@ from axkg.dto.ai import AiTaskDefinitionDTO, ResolvedExecutionConfigDTO
 # SPEC-007 MVP 기본값 — settings.ai_provider seed와 동일한 값의 코드 소유 사본.
 DEFAULT_PROVIDER = "claude"
 DEFAULT_OPTIONS: dict[str, Any] = {"timeout_sec": 300, "resume": False}
-DEFAULT_PROVIDER_OPTIONS: dict[str, Any] = {"max_turns": 3, "effort": "medium"}
+DEFAULT_PROVIDER_OPTIONS: dict[str, Any] = {"max_turns": 6, "effort": "medium"}
 
 
 def _merge(*layers: dict[str, Any] | None) -> dict[str, Any]:

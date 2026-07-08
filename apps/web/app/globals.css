@@ -63,3 +63,13 @@ body {
   background: hsl(var(--muted));
   color: hsl(var(--foreground));
 }
+
+/* 21-html 시안의 얇은 스크롤바 (Source Inbox 큐/상세). */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 9999px;
+}

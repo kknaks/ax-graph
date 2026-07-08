@@ -92,6 +92,53 @@ class AiTaskRepository:
         row = await self._session.get(AiTask, task_id)
         return _to_dto(row) if row is not None else None
 
+    async def list_by_source(self, source_id: uuid.UUID) -> list[AiTaskDTO]:
+        """source에 연결된 ai_task 이력을 queued_at 오름차순으로 반환 (AXKG-SPEC-003)."""
+        rows = (
+            await self._session.scalars(
+                sa.select(AiTask)
+                .where(AiTask.source_id == source_id)
+                .order_by(AiTask.queued_at.asc(), AiTask.retry_count.asc())
+            )
+        ).all()
+        return [_to_dto(row) for row in rows]
+
+    async def get_latest_failed_by_source(
+        self, source_id: uuid.UUID, task_type: str
+    ) -> AiTaskDTO | None:
+        """재시도 기준이 될 최신 failed task (요약 재시도 retry_of_task_id 원천)."""
+        row = await self._session.scalar(
+            sa.select(AiTask)
+            .where(
+                AiTask.source_id == source_id,
+                AiTask.task_type == task_type,
+                AiTask.status == "failed",
+            )
+            .order_by(AiTask.queued_at.desc(), AiTask.retry_count.desc())
+            .limit(1)
+        )
+        return _to_dto(row) if row is not None else None
+
+    async def get_latest_succeeded_by_source(
+        self, source_id: uuid.UUID, task_type: str
+    ) -> AiTaskDTO | None:
+        """최신 succeeded task — 피드백 재요약이 이어붙일 resume session 원천 (PLAN-005-T-016).
+
+        직전 요약(v1/…/vN)을 낸 task의 `open_kknaks_session_id`를 resume 대상으로 쓴다
+        (AXKG-SPEC-002 open-kknaks Session Rule의 원 task 경로).
+        """
+        row = await self._session.scalar(
+            sa.select(AiTask)
+            .where(
+                AiTask.source_id == source_id,
+                AiTask.task_type == task_type,
+                AiTask.status == "succeeded",
+            )
+            .order_by(AiTask.queued_at.desc(), AiTask.retry_count.desc())
+            .limit(1)
+        )
+        return _to_dto(row) if row is not None else None
+
     async def set_assembly_snapshot(
         self,
         task_id: uuid.UUID,

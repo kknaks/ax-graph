@@ -13,6 +13,11 @@ dependencies = [
     "pydantic-settings>=2.6",
     "httpx>=0.27",
     "jsonschema>=4.23",
+    "beautifulsoup4>=4.12",
+    "yt-dlp>=2024.0",
+    "youtube-transcript-api>=1.0",
+    "playwright>=1.40",
+    "open-kknaks>=2.0.2",
 ]
 
 [dependency-groups]

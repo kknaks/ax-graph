@@ -9,6 +9,7 @@ handler.handle_result로 전달. 검증 실패 출력은 어떤 필드도 소비
 재시도: 실패 task는 불변, retry_of_task_id로 새 row (AXKG-SPEC-002).
 """
 import json
+import re
 import uuid
 from typing import Any
 
@@ -24,7 +25,7 @@ from axkg.repositories.prompts import PromptRepository
 from axkg.repositories.settings import SettingRepository
 from axkg.services.ai import fallbacks
 from axkg.services.ai.assembly import assemble_input
-from axkg.services.ai.context import ContextBuilderRegistry
+from axkg.services.ai.context import ContextBuildError, ContextBuilderRegistry
 from axkg.services.ai.resolution import resolve_execution_config
 
 AI_PROVIDER_SETTINGS_KEY = "ai_provider"
@@ -36,6 +37,18 @@ ERROR_OUTPUT_SCHEMA_MISMATCH = "OUTPUT_SCHEMA_MISMATCH"
 ERROR_AI_TASK_SUBMIT_FAILED = "AI_TASK_SUBMIT_FAILED"
 # open-kknaks task가 terminal failed/cancelled로 끝남 (SPEC-011 Case Matrix 밖 — 실행측 코드)
 ERROR_OPEN_KKNAKS_TASK_FAILED = "OPEN_KKNAKS_TASK_FAILED"
+
+# 출력 앞뒤를 감싼 마크다운 코드펜스(```json … ```)를 벗겨낸다. claude가 프로젝트
+# context를 읽는 agentic 실행에서 JSON을 펜스로 감싸 내는 경우가 있어(출력 계약은
+# "JSON 하나로만"이지만 모델이 종종 펜스를 덧댐), 파싱 전에 정규화한다. 펜스가 없으면
+# 원문을 그대로 돌려준다.
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL | re.IGNORECASE)
+
+
+def strip_code_fences(text: str) -> str:
+    """선행/후행 마크다운 코드펜스를 제거한다(내부 JSON은 건드리지 않음)."""
+    match = _FENCE_RE.match(text)
+    return match.group(1) if match else text
 
 
 class TaskDefinitionNotFoundError(Exception):
@@ -198,7 +211,14 @@ class AiExecutionService:
                 fallback_codes.append(fallbacks.TEMPLATE_FALLBACK_USED)
 
         # 2) 블록 조립 (변수 치환 없음 — assembly 모듈의 코드 고정 프레임)
-        data_blocks = await builder.build_data_blocks(task, definition)
+        #    데이터 준비(수집 등) 실패는 인프라 오류가 아니라 task 실패로 보존한다
+        #    (SPEC-011 Case Matrix: CONTENT_FETCH_FAILED → source collection_failed).
+        try:
+            data_blocks = await builder.build_data_blocks(task, definition)
+        except ContextBuildError as exc:
+            return await self._tasks.mark_failed(
+                task_id, error_code=exc.error_code, error_message=exc.message
+            )
         assembled = assemble_input(
             prompt_text=prompt_text,
             output_schema=output_schema,
@@ -248,7 +268,7 @@ class AiExecutionService:
 
         # 5) 출력 파싱 → 스키마 검증 → 소비 (실패 시 어떤 필드도 소비하지 않음)
         try:
-            output = json.loads(result.result_text or "")
+            output = json.loads(strip_code_fences(result.result_text or ""))
         except (json.JSONDecodeError, TypeError) as exc:
             return await self._tasks.mark_failed(
                 task_id, error_code=ERROR_OUTPUT_PARSE_FAILED, error_message=str(exc)

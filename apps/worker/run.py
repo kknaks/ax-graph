@@ -4,6 +4,11 @@ import asyncio
 import os
 
 from open_kknaks.broker.redis import RedisBroker
+# 요약 작업 workspace — 이미지에 COPY된 프로젝트(진입 문서 CLAUDE.md/agent.md +
+# context/source-summary-guide.md). claude를 이 디렉토리 "안에서" 실행하면 진입 문서를
+# 스스로 읽는다. WORK_DIR env가 없을 때의 기본값을 run.py 옆 workspace로 고정한다
+# (docker: /app/workspace, 로컬: apps/worker/workspace — 둘 다 이 경로로 해석됨).
+DEFAULT_WORK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace")
 from open_kknaks.config import ClaudeConfig
 from open_kknaks.middleware.cost import CostMiddleware
 from open_kknaks.middleware.logging import LoggingMiddleware
@@ -20,7 +25,7 @@ async def main() -> None:
     await broker.connect()
 
     config = ClaudeConfig(
-        work_dir=os.environ.get("WORK_DIR", "/tmp"),
+        work_dir=os.environ.get("WORK_DIR", DEFAULT_WORK_DIR),
     )
 
     worker = ClaudeWorker(

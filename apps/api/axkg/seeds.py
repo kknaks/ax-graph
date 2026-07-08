@@ -34,7 +34,7 @@ AI_PROVIDER_DEFAULT = {
     "provider": "claude",
     "model": None,
     "options": {"timeout_sec": 300, "resume": False},
-    "provider_options": {"max_turns": 3, "effort": "medium"},
+    "provider_options": {"max_turns": 6, "effort": "medium"},
     "task_overrides": {},
 }
 
@@ -52,6 +52,8 @@ PROMPT_SEEDS: list[dict] = [
         "prompt_text": (
             "당신은 개인 지식 베이스의 수집 비서다. 주어진 source URL과 수집된 원문"
             "(SourceMaterial)을 읽고, 나중에 PARA 분류와 문서화에 쓸 수 있는 요약 카드를 만든다. "
+            "먼저 작업 프로젝트의 `context/source-summary-guide.md`를 읽고, 그 지침(adapter별 원문 "
+            "성격·본문 선별·출력 계약·특수 케이스)에 따라 요약하라. "
             "원문에 없는 사실을 추가하지 말고, 저자의 주장과 근거를 구분해서 압축하라.\n\n"
             "출력은 반드시 output_schema를 따르는 JSON 하나로만 한다. "
             "`title`은 원문 제목을 우선하되 없으면 내용 기반으로 짓고, `summary`는 3~6문장, "

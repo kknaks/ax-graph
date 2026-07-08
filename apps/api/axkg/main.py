@@ -4,9 +4,11 @@
 
 인증 (AXKG-SPEC-008):
 - auth 외 모든 라우터에 Bearer 검증 dependency를 기본 적용한다.
-- 제외: `/health`, `/integrations/*` — Slack intake는 Slack signing secret
-  검증 소관(AXKG-SPEC-003, WP1에서 구현)이라 Bearer dependency를 걸지 않는다.
+- 제외: `/health`, `/integrations/*`, `POST /api/v1/slack/commands` — Slack intake는
+  Slack signing secret 검증 소관(AXKG-SPEC-003)이라 Bearer dependency를 걸지 않는다.
 """
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,6 +16,7 @@ from axkg.api.routes import (
     auth,
     sources,
     integrations,
+    slack,
     approval_gates,
     documentation_gates,
     documents,
@@ -25,7 +28,50 @@ from axkg.api.routes import (
 from axkg.config import settings as app_settings
 from axkg.core.security import get_current_auth
 
-app = FastAPI(title="AX Knowledge Graph API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """open-kknaks Redis broker/client 생명주기 (AXKG-SPEC-007, WP1 Phase 3).
+
+    `AXKG_REDIS_URL`이 설정된 경우에만 producer client를 연결한다. 미설정(테스트/오프라인)
+    이면 `app.state.open_kknaks_client=None` — 요약 자동 트리거는 조용히 생략된다.
+    worker(`apps/worker`)가 같은 Redis(namespace=axkg)의 consumer다.
+    """
+    client = None
+    broker = None
+    if app_settings.axkg_redis_url:
+        # 지연 import — open-kknaks 미설치 환경에서 앱 임포트가 깨지지 않게.
+        from axkg.integrations.redis_open_kknaks import create_redis_open_kknaks_client
+
+        client, broker = await create_redis_open_kknaks_client(
+            app_settings.axkg_redis_url, namespace="axkg"
+        )
+    app.state.open_kknaks_client = client
+    app.state.open_kknaks_broker = broker
+    # Slack 봇 아웃바운드 client (AXKG-SPEC-003 S-1). 토큰 미설정이면 None → 앵커/회신 생략.
+    from axkg.integrations.slack import SlackBotClient, SlackIdempotencyStore
+
+    app.state.slack_bot_client = (
+        SlackBotClient(app_settings.axkg_slack_bot_token)
+        if app_settings.axkg_slack_bot_token
+        else None
+    )
+    # 슬래시 더블서밋 차단용 in-memory 멱등 집합.
+    app.state.slack_idempotency = SlackIdempotencyStore()
+    # background 요약 실행용 factory (runner 기본값과 동일하나 명시 주입으로 테스트 가능).
+    from axkg.core.database import get_session_factory
+
+    app.state.session_factory = get_session_factory()
+    try:
+        yield
+    finally:
+        if broker is not None:
+            await broker.close()
+        if app.state.slack_bot_client is not None:
+            await app.state.slack_bot_client.aclose()
+
+
+app = FastAPI(title="AX Knowledge Graph API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +83,8 @@ app.add_middleware(
 app.include_router(auth.router)
 # Slack 서명 검증 소관 — Bearer 제외 (AXKG-SPEC-008 예외).
 app.include_router(integrations.router)
+# POST /api/v1/slack/commands — Slack 등록 Request URL 문자 일치, signing secret 보호.
+app.include_router(slack.router)
 
 _PROTECTED_ROUTERS = (
     sources.router,

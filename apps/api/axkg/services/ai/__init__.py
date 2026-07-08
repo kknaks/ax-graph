@@ -10,6 +10,7 @@
 from axkg.services.ai.assembly import assemble_input
 from axkg.services.ai.context import (
     ContextBuilder,
+    ContextBuildError,
     ContextBuilderRegistry,
     DummyContextBuilder,
     UnknownHandlerKindError,
@@ -24,6 +25,7 @@ from axkg.services.ai.resolution import resolve_execution_config
 __all__ = [
     "AiExecutionService",
     "ContextBuilder",
+    "ContextBuildError",
     "ContextBuilderRegistry",
     "DummyContextBuilder",
     "RetryNotAllowedError",

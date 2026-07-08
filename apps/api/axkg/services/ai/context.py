@@ -22,6 +22,20 @@ class UnknownHandlerKindError(Exception):
         self.handler_kind = handler_kind
 
 
+class ContextBuildError(Exception):
+    """데이터 블록 준비 단계(예: 원문 수집)의 실패 — 실행측 코드로 매핑한다.
+
+    파이프라인은 이 예외를 인프라 오류가 아니라 task 실패(error_code)로 흡수한다.
+    요약 스테이지의 수집 실패(AXKG-SPEC-012 Failure Contract → SPEC-011 Case Matrix
+    `CONTENT_FETCH_FAILED` 등)를 `ai_tasks.status=failed`로 보존하기 위한 통로다.
+    """
+
+    def __init__(self, error_code: str, message: str) -> None:
+        super().__init__(f"{error_code}: {message}")
+        self.error_code = error_code
+        self.message = message
+
+
 class ContextBuilder(ABC):
     """스테이지별 입력 데이터 블록 공급 + 검증 통과한 출력의 소비 인터페이스."""
 
