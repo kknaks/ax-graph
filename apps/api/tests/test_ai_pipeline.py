@@ -25,6 +25,8 @@ from axkg.integrations.open_kknaks import (
     OpenKknaksTaskResult,
 )
 from axkg.models import Prompt
+from axkg.repositories.ai_task_definitions import AiTaskDefinitionRepository
+from axkg.repositories.settings import SettingRepository
 from axkg.services.ai import (
     AiExecutionService,
     ContextBuilderRegistry,
@@ -126,7 +128,8 @@ async def test_execute_success_snapshots_and_consumes_output(
         # SPEC-007 MVP 기본값이 생성 시점에 스냅샷된다
         assert task.provider == "claude"
         assert task.options["timeout_sec"] == 300
-        assert task.provider_options == {"max_turns": 6, "effort": "medium"}
+        # 전역 기본 max_turns=3 (collect_source_summary는 definition override 없음)
+        assert task.provider_options == {"max_turns": 3, "effort": "medium"}
 
         done = await service.execute_task(task.id)
         await session.commit()
@@ -405,7 +408,33 @@ def test_resolution_defaults_without_settings() -> None:
     assert config.provider == "claude"
     assert config.model is None
     assert config.options == {"timeout_sec": 300, "resume": False}
-    assert config.provider_options == {"max_turns": 6, "effort": "medium"}
+    assert config.provider_options == {"max_turns": 3, "effort": "medium"}
+
+
+async def test_seed_global_max_turns_3_and_graph_rag_chat_override_6(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """SPEC-007 정합: 전역 기본 max_turns=3, graph_rag_chat definition만 override 6.
+
+    이 태스크의 핵심 검증 지점 — 시드된 전역 설정 + definition default_provider_options를
+    실제로 병합했을 때 chat만 6, 다른 stage(예: source_summary)는 전역 3을 받는다.
+    """
+    async with session_factory() as session:
+        global_settings = await SettingRepository(session).get_value("ai_provider")
+        assert global_settings["provider_options"]["max_turns"] == 3
+
+        defs = AiTaskDefinitionRepository(session)
+        summary_def = await defs.get_by_key("collect_source_summary")
+        chat_def = await defs.get_by_key("graph_rag_chat")
+        assert summary_def is not None and chat_def is not None
+
+        summary_cfg = resolve_execution_config(global_settings, summary_def)
+        chat_cfg = resolve_execution_config(global_settings, chat_def)
+
+        # source_summary는 definition override 없음 → 전역 3, effort medium 유지
+        assert summary_cfg.provider_options == {"max_turns": 3, "effort": "medium"}
+        # graph_rag_chat만 definition default_provider_options로 6, effort medium 유지
+        assert chat_cfg.provider_options == {"max_turns": 6, "effort": "medium"}
 
 
 # ---------------------------------------------------------------------------

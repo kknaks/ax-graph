@@ -34,7 +34,7 @@ AI_PROVIDER_DEFAULT = {
     "provider": "claude",
     "model": None,
     "options": {"timeout_sec": 300, "resume": False},
-    "provider_options": {"max_turns": 6, "effort": "medium"},
+    "provider_options": {"max_turns": 3, "effort": "medium"},
     "task_overrides": {},
 }
 
@@ -391,6 +391,8 @@ TASK_DEFINITION_SEEDS: list[dict] = [
         "handler_kind": "graph_rag_chat",
         "prompt_key": "graph_rag_chat",
         "template_key": None,
+        # 전역 기본 max_turns=3인데 chat만 더 많은 turn이 필요(SPEC-007 Rule).
+        "default_provider_options": {"max_turns": 6},
     },
 ]
 
@@ -491,7 +493,7 @@ def seed_task_definitions(conn: Connection) -> None:
                 default_provider=None,
                 default_model=None,
                 default_options={},
-                default_provider_options={},
+                default_provider_options=seed.get("default_provider_options", {}),
                 enabled=True,
             )
         )
