@@ -1,46 +1,83 @@
-// Source Inbox 화면 오케스트레이터 (AXKG-SPEC-003 U-1/U-2/U-3).
-// 좌: 큐 목록(상태별 필터) / 우: 선택 source 상세. 상단 우측: Direct Inbox 모달.
-// 데이터 로드/재시도/생성 배선을 여기서 모은다. 앱 셸/가드는 (app)/layout 에서 재사용.
+// Source Inbox 원페이지 오케스트레이터 (AXKG-SPEC-001/002/003 · 21-html page-approval SSOT).
+// 페이지 하나에서 파이프라인 전체를 추적한다: 좌=Source Inbox 큐, 우=요약→분류 게이트→문서화 세로 스택.
+// 게이트 액션(진입/피드백/승인/재시도)과 폴링을 여기서 모은다. 앱 셸/가드는 (app)/layout 재사용.
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  activeRevisionOf,
+  approveGate,
+  enterClassificationGate,
+  feedbackGate,
   getSource,
+  getSourceGates,
+  isGateRunning,
   listSources,
   queueCollection,
+  regenerateGate,
+  requestReclassification,
+  retryGate,
   sourceCaseMessage,
-  type ClassificationGateEntry,
+  summaryFeedback,
+  type Gate,
   type Source,
 } from "@/lib/api-client/sources";
 import { SourceList, type StatusFilter } from "@/components/source-list";
-import { SourceDetail } from "@/components/source-detail";
+import { GateHistoryStack } from "@/components/gate-history-stack";
+import {
+  GateFeedbackModal,
+  type FeedbackTarget,
+} from "@/components/gate-feedback-modal";
 import { DirectInboxModal } from "@/components/direct-inbox-modal";
-import { SourceDocumentModal } from "@/components/source-document-modal";
+
+// 피드백 모달이 겨냥하는 대상 — 요약 초안(재요약) 또는 특정 게이트(재생성).
+type FeedbackContext =
+  | { kind: "summary"; source: Source }
+  | { kind: "gate"; gate: Gate };
+
+const POLL_MS = 2500;
 
 export function SourceInbox() {
   const [sources, setSources] = useState<Source[]>([]);
-  const [filter, setFilter] = useState<StatusFilter>("all");
+  const [filter, setFilter] = useState<StatusFilter>("inbox");
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
 
+  // 완료(documented) 탭 — visible=false 라 기본 목록에 없어 별도 로드.
+  const [documented, setDocumented] = useState<Source[]>([]);
+  const [documentedLoading, setDocumentedLoading] = useState(false);
+  const [documentedError, setDocumentedError] = useState<string | null>(null);
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Source | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  selectedIdRef.current = selectedId;
 
+  // 우측 스택 게이트 상태
+  const [gates, setGates] = useState<Gate[]>([]);
+  const [gatesLoading, setGatesLoading] = useState(false);
+  const [gatesError, setGatesError] = useState<string | null>(null);
+  const [classifying, setClassifying] = useState(false);
+  const [gateBusyId, setGateBusyId] = useState<string | null>(null);
+
+  // collection_failed 요약 재시도
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
 
-  // 요약 초안 문서보기 모달 (U-2 · T-015 개정본) + [분류] 진입 안내
-  const [docModalOpen, setDocModalOpen] = useState(false);
-  const [classifyNotice, setClassifyNotice] = useState<string | null>(null);
+  // 공통 피드백 모달
+  const [fbContext, setFbContext] = useState<FeedbackContext | null>(null);
+  const [fbTarget, setFbTarget] = useState<FeedbackTarget | null>(null);
+  const [fbBusy, setFbBusy] = useState(false);
+  const [fbError, setFbError] = useState<string | null>(null);
 
-  // 목록 로드 (필터 변경 시 재조회)
+  // --- 목록 로드 (visible 전체를 받고 inbox/승인 구분은 SourceList가 inbox_label 로 클라이언트 분류) ---
   const loadList = useCallback(async () => {
     setLoading(true);
     setListError(null);
     try {
-      const items = await listSources(filter === "all" ? undefined : filter);
+      const items = await listSources();
       setSources(items);
     } catch (err) {
       setSources([]);
@@ -48,40 +85,99 @@ export function SourceInbox() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
   useEffect(() => {
     void loadList();
   }, [loadList]);
 
-  // source 선택 → 상세 원본 정보 조회 (GET /sources/{id})
-  const selectSource = useCallback(async (source: Source) => {
-    setSelectedId(source.id);
-    setSelected(source); // 목록 데이터로 즉시 표시하고
-    setRetryError(null);
-    setClassifyNotice(null); // 대상 전환 시 이전 [분류] 안내 초기화
+  // --- 완료(documented) 목록 로드 (GET /sources?status=documented) ---
+  const loadDocumented = useCallback(async () => {
+    setDocumentedLoading(true);
+    setDocumentedError(null);
     try {
-      const full = await getSource(source.id); // 상세로 보강
-      setSelected((cur) => (cur?.id === source.id ? full : cur));
-    } catch {
-      // 상세 조회 실패 시 목록 데이터로 유지 (blocked 아님)
+      const items = await listSources("documented");
+      setDocumented(items);
+    } catch (err) {
+      setDocumented([]);
+      setDocumentedError(sourceCaseMessage(err, "완료 목록을 불러오지 못했습니다."));
+    } finally {
+      setDocumentedLoading(false);
     }
   }, []);
 
-  // 요약 재시도 (POST /sources/{id}/queue-collection) — 목록/상세 공용.
-  // 상세에서 note(원문 복붙/요지)를 함께 넘기면 메모 갱신 + 재요약을 한 번에 처리한다.
-  const retrySource = useCallback(
+  // 완료 탭 진입 시 로드.
+  useEffect(() => {
+    if (filter === "documented") void loadDocumented();
+  }, [filter, loadDocumented]);
+
+  // --- 게이트 로드 (선택 유지 시에만 반영) ---
+  const loadGates = useCallback(async (sourceId: string, spinner = true) => {
+    if (spinner) setGatesLoading(true);
+    setGatesError(null);
+    try {
+      const fresh = await getSourceGates(sourceId);
+      if (selectedIdRef.current === sourceId) setGates(fresh);
+    } catch (err) {
+      if (selectedIdRef.current === sourceId) {
+        setGatesError(sourceCaseMessage(err, "게이트 상태를 불러오지 못했습니다."));
+      }
+    } finally {
+      if (spinner) setGatesLoading(false);
+    }
+  }, []);
+
+  // source 최신화(inbox_label 갱신 → 좌측 리스트/우측 헤더 반영)
+  const patchSource = useCallback(async (sourceId: string) => {
+    try {
+      const full = await getSource(sourceId);
+      setSelected((cur) => (cur?.id === sourceId ? full : cur));
+      setSources((cur) => cur.map((s) => (s.id === sourceId ? full : s)));
+    } catch {
+      // 최신화 실패는 조용히 무시 (다음 폴링/액션에서 회복)
+    }
+  }, []);
+
+  // --- source 선택 → 상세 + 게이트 로드 ---
+  const selectSource = useCallback(
+    async (source: Source) => {
+      setSelectedId(source.id);
+      selectedIdRef.current = source.id;
+      setSelected(source);
+      setGates([]);
+      setGatesError(null);
+      setRetryError(null);
+      setGateBusyId(null);
+      void getSource(source.id)
+        .then((full) => {
+          setSelected((cur) => (cur?.id === source.id ? full : cur));
+        })
+        .catch(() => {});
+      void loadGates(source.id);
+    },
+    [loadGates],
+  );
+
+  // --- generating/regenerating 게이트 폴링 ---
+  useEffect(() => {
+    if (!selectedId) return;
+    if (!gates.some(isGateRunning)) return;
+    const timer = setInterval(() => {
+      void loadGates(selectedId, false).then(() => patchSource(selectedId));
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [selectedId, gates, loadGates, patchSource]);
+
+  // --- collection_failed 요약 재시도 ---
+  const retryCollection = useCallback(
     async (source: Source, note?: string) => {
       if (retrying) return;
-      setSelectedId(source.id);
       setRetrying(true);
       setRetryError(null);
       try {
         const updated = await queueCollection(source.id, note);
         setSelected(updated);
-        setSources((cur) =>
-          cur.map((s) => (s.id === updated.id ? updated : s)),
-        );
+        setSources((cur) => cur.map((s) => (s.id === updated.id ? updated : s)));
       } catch (err) {
         setRetryError(
           sourceCaseMessage(err, "요약 재시도에 실패했습니다. 잠시 후 다시 시도해 주세요."),
@@ -93,6 +189,162 @@ export function SourceInbox() {
     [retrying],
   );
 
+  // --- [분류] 분류 게이트 생성 → 폴링 시작 ---
+  const handleClassify = useCallback(
+    async (source: Source) => {
+      if (classifying) return;
+      setClassifying(true);
+      setGatesError(null);
+      try {
+        const gate = await enterClassificationGate(source.id);
+        if (selectedIdRef.current === source.id) setGates([gate]);
+        // 분류 시작 → 인박스에서 승인 게이트 대기로 이동 → 승인 탭으로 전환해 이동을 눈에 보이게.
+        setFilter("approval");
+        await loadGates(source.id, false);
+        await patchSource(source.id);
+      } catch (err) {
+        setGatesError(sourceCaseMessage(err, "분류를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요."));
+      } finally {
+        setClassifying(false);
+      }
+    },
+    [classifying, loadGates, patchSource],
+  );
+
+  // --- 게이트 승인 ---
+  const handleApproveGate = useCallback(
+    async (gate: Gate) => {
+      if (gateBusyId) return;
+      setGateBusyId(gate.id);
+      setGatesError(null);
+      const active = activeRevisionOf(gate);
+      try {
+        await approveGate(gate.id, active?.id);
+        await loadGates(gate.source_id, false);
+        await patchSource(gate.source_id);
+        // 문서화 승인 → source documented (visible=false): inbox/승인에서 빠지고 완료 탭으로.
+        if (gate.gate_kind === "documentation") {
+          await loadList();
+          await loadDocumented();
+        }
+      } catch (err) {
+        // STALE/ALREADY_APPROVED 등은 최신 상태를 다시 불러와 화면을 정합화.
+        await loadGates(gate.source_id, false);
+        setGatesError(sourceCaseMessage(err, "승인에 실패했습니다. 최신 상태를 확인해 주세요."));
+      } finally {
+        setGateBusyId(null);
+      }
+    },
+    [gateBusyId, loadGates, patchSource, loadList, loadDocumented],
+  );
+
+  // --- 게이트 실패 재시도 ---
+  const handleRetryGate = useCallback(
+    async (gate: Gate) => {
+      if (gateBusyId) return;
+      setGateBusyId(gate.id);
+      setGatesError(null);
+      try {
+        await retryGate(gate.id);
+        await loadGates(gate.source_id, false);
+        await patchSource(gate.source_id);
+      } catch (err) {
+        setGatesError(sourceCaseMessage(err, "재시도에 실패했습니다. 잠시 후 다시 시도해 주세요."));
+      } finally {
+        setGateBusyId(null);
+      }
+    },
+    [gateBusyId, loadGates, patchSource],
+  );
+
+  // --- 피드백 모달 열기 ---
+  const openSummaryFeedback = useCallback((source: Source) => {
+    setFbContext({ kind: "summary", source });
+    setFbTarget({ label: "요약 초안 ①", version: "초안", submitLabel: "다시 요약" });
+    setFbError(null);
+    setFbBusy(false);
+  }, []);
+
+  const openGateFeedback = useCallback((gate: Gate) => {
+    const active = activeRevisionOf(gate);
+    const isDoc = gate.gate_kind === "documentation";
+    setFbContext({ kind: "gate", gate });
+    setFbTarget({
+      label: isDoc ? "문서화 승인 게이트 ③" : "분류 게이트 ②",
+      version: active ? `v${active.version}` : "v1",
+      submitLabel: "재생성",
+      // SPEC-004 U-4: "이 destination이 아님" 보조 옵션은 문서화 게이트(③)에만.
+      allowReclassify: isDoc,
+    });
+    setFbError(null);
+    setFbBusy(false);
+  }, []);
+
+  const closeFeedback = useCallback(() => {
+    if (fbBusy) return;
+    setFbContext(null);
+    setFbTarget(null);
+    setFbError(null);
+  }, [fbBusy]);
+
+  // --- 피드백 제출 (대상별 배선) ---
+  const submitFeedback = useCallback(
+    async (body: string) => {
+      if (!fbContext || fbBusy) return;
+      setFbBusy(true);
+      setFbError(null);
+      try {
+        if (fbContext.kind === "summary") {
+          // 요약 초안 재요약(세션 resume) → summarizing 로 전이된 source 반영.
+          const updated = await summaryFeedback(fbContext.source.id, body);
+          setSelected(updated);
+          setSources((cur) => cur.map((s) => (s.id === updated.id ? updated : s)));
+        } else {
+          // 게이트 피드백 저장 → v2 재생성 실행(폴링이 이어받음).
+          const gate = fbContext.gate;
+          await feedbackGate(gate.id, body);
+          await regenerateGate(gate.id);
+          await loadGates(gate.source_id, false);
+          await patchSource(gate.source_id);
+        }
+        setFbContext(null);
+        setFbTarget(null);
+      } catch (err) {
+        setFbError(sourceCaseMessage(err, "피드백 전송에 실패했습니다. 잠시 후 다시 시도해 주세요."));
+      } finally {
+        setFbBusy(false);
+      }
+    },
+    [fbContext, fbBusy, loadGates, patchSource],
+  );
+
+  // --- "이 destination이 아님" 재분류 요청 (SPEC-004 S-3 · BE T-009) ---
+  // 문서화 게이트에 재분류 요청 → 문서화 게이트 cancelled(reclassification_requested) +
+  // 분류 게이트 approved→regenerating(새 분류 revision). GET /sources/{id}/gates 재조회로 화면을
+  // "분류 다시 검토"로 되돌리고, regenerating 게이트는 폴링이 이어받는다.
+  const submitReclassification = useCallback(
+    async (reason: string) => {
+      if (!fbContext || fbContext.kind !== "gate" || fbBusy) return;
+      setFbBusy(true);
+      setFbError(null);
+      const gate = fbContext.gate;
+      try {
+        await requestReclassification(gate.id, reason);
+        await loadGates(gate.source_id, false);
+        await patchSource(gate.source_id);
+        setFbContext(null);
+        setFbTarget(null);
+      } catch (err) {
+        setFbError(
+          sourceCaseMessage(err, "재분류 요청에 실패했습니다. 최신 상태를 확인해 주세요."),
+        );
+      } finally {
+        setFbBusy(false);
+      }
+    },
+    [fbContext, fbBusy, loadGates, patchSource],
+  );
+
   // 모달 저장 성공 → 목록 새로고침 + 새 항목 선택
   const handleCreated = useCallback(
     (created: Source) => {
@@ -102,62 +354,40 @@ export function SourceInbox() {
     [loadList, selectSource],
   );
 
-  // [문서보기] 열기 (summarized 상세 CTA)
-  const openDocument = useCallback((source: Source) => {
-    setSelectedId(source.id);
-    setSelected(source);
-    setClassifyNotice(null);
-    setDocModalOpen(true);
-  }, []);
-
-  // [피드백] 성공 → 재요약(summarizing) 시작된 source 로 목록/상세 갱신.
-  // 세션 resume 로 완료되면 다시 summarized 가 되며, 라이브 갱신 연동은 admin 후속.
-  const handleSummaryUpdated = useCallback((updated: Source) => {
-    setSelected(updated);
-    setSources((cur) => cur.map((s) => (s.id === updated.id ? updated : s)));
-    setClassifyNotice(null);
-  }, []);
-
-  // [분류] 성공 → 분류 게이트 진입. 화면·md 변환은 WP3 범위 밖이라 안내만 표시하고 상태만 갱신.
-  const handleClassifyEntered = useCallback(
-    (source: Source, entry: ClassificationGateEntry) => {
-      if (entry.source) {
-        setSelected(entry.source);
-        setSources((cur) =>
-          cur.map((s) => (s.id === entry.source!.id ? entry.source! : s)),
-        );
-      }
-      setClassifyNotice("분류 게이트로 보냈습니다. 분류 화면은 준비 중입니다 (WP3).");
-    },
-    [],
-  );
-
   return (
     <main className="w-full px-6 py-5">
       <div className="mb-4">
-        <h1 className="text-xl font-semibold tracking-tight">Source Inbox</h1>
+        <h1 className="text-xl font-semibold tracking-tight">문서함</h1>
       </div>
 
-      {/* 좌: 큐 목록 (300px) / 우: 선택 source 상세 (1fr) — 시안 2컬럼 */}
+      {/* 좌: 큐 목록 (300px) / 우: 요약→분류→문서화 세로 스택 (1fr) — 21-html 2컬럼 */}
       <div className="grid grid-cols-[300px_1fr] gap-4">
         <SourceList
-          sources={sources}
+          sources={filter === "documented" ? documented : sources}
           selectedId={selectedId}
           filter={filter}
-          loading={loading}
-          error={listError}
+          loading={filter === "documented" ? documentedLoading : loading}
+          error={filter === "documented" ? documentedError : listError}
           onSelect={selectSource}
           onFilterChange={setFilter}
           onOpenModal={() => setModalOpen(true)}
-          onRetry={retrySource}
+          onRetry={retryCollection}
         />
-        <SourceDetail
+        <GateHistoryStack
           source={selected}
+          gates={gates}
+          gatesLoading={gatesLoading}
+          gatesError={gatesError}
+          classifying={classifying}
+          gateBusyId={gateBusyId}
           retrying={retrying}
           retryError={retryError}
-          onRetry={retrySource}
-          onOpenDocument={openDocument}
-          classifyNotice={classifyNotice}
+          onSummaryFeedback={openSummaryFeedback}
+          onClassify={handleClassify}
+          onGateFeedback={openGateFeedback}
+          onApproveGate={handleApproveGate}
+          onRetryGate={handleRetryGate}
+          onRetryCollection={retryCollection}
         />
       </div>
 
@@ -167,12 +397,14 @@ export function SourceInbox() {
         onCreated={handleCreated}
       />
 
-      <SourceDocumentModal
-        open={docModalOpen}
-        source={selected}
-        onClose={() => setDocModalOpen(false)}
-        onSummaryUpdated={handleSummaryUpdated}
-        onClassifyEntered={handleClassifyEntered}
+      <GateFeedbackModal
+        open={fbContext !== null}
+        target={fbTarget}
+        busy={fbBusy}
+        error={fbError}
+        onClose={closeFeedback}
+        onSubmit={submitFeedback}
+        onReclassify={submitReclassification}
       />
     </main>
   );

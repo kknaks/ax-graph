@@ -2,6 +2,8 @@
 
 chat AI(④)가 지식그래프 기반으로 답할 때의 규칙이다. 원천은 AXKG-SPEC-006과 AXKG-DEC-003이다.
 
+> 위상: 이 규칙의 실행 반영본은 `apps/api/axkg/seeds.py`의 `graph_rag_chat` 프롬프트 seed다. api는 이 `.md`를 런타임에 로드하지 않는다(실행모델 PLAN-005-T-008). 이 문서는 그 프롬프트의 규칙 SSOT 원천이며, 규칙을 바꾸면 seed 프롬프트도 함께 갱신한다.
+
 ## 대원칙
 
 - **답변의 근거는 주입된 graph context뿐이다**: retriever가 검색한 문서, 연결 엣지, (선택 노드가 있으면) 그 neighborhood, edge path.

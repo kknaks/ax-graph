@@ -98,21 +98,29 @@ class AiExecutionService:
         gate_id: uuid.UUID | None = None,
         revision_id: uuid.UUID | None = None,
         payload: dict[str, Any] | None = None,
+        options_overrides: dict[str, Any] | None = None,
     ) -> AiTaskDTO:
         """queued ai_task 생성. 실행 설정은 생성 시점에 해석·스냅샷한다.
 
         SPEC-007: 설정 변경은 기존 queued/running task에 소급 적용하지 않는다 —
         그래서 provider/model/options/provider_options는 생성 시점 값으로 고정된다.
+
+        `options_overrides`는 해석된 config.options 위에 얹는 실행측 오버레이다 —
+        세션 resume(`{"resume": {"mode": "session", "session_id": ...}}`, SPEC-002)처럼
+        도메인 WP가 스냅샷 시점에 주입해야 하는 옵션에만 쓴다.
         """
         definition = await self._resolve_definition(task_type)
         global_settings = await self._settings.get_value(AI_PROVIDER_SETTINGS_KEY)
         config = resolve_execution_config(global_settings, definition)
+        options = config.options
+        if options_overrides:
+            options = {**config.options, **options_overrides}
         return await self._tasks.create(
             task_type=task_type,
             task_definition_id=definition.id,
             provider=config.provider,
             model=config.model,
-            options=config.options,
+            options=options,
             provider_options=config.provider_options,
             source_id=source_id,
             gate_id=gate_id,

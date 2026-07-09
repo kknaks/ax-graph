@@ -34,6 +34,10 @@ class SourceResponse(BaseModel):
     visible_in_inbox: bool
     summary_payload: dict[str, Any] = Field(default_factory=dict)
     destination_type: str | None = None
+    approved_classification_gate_id: uuid.UUID | None = None
+    # Inbox 큐 파생 라벨(classify_pending/regenerating/approved) — DB 미저장, 게이트 상태 조합
+    # (AXKG-SPEC-001 매핑표). 게이트가 없거나 매핑 밖이면 None.
+    inbox_label: str | None = None
     documented_at: datetime | None = None
     deleted_at: datetime | None = None
     error_message: str | None = None
@@ -43,7 +47,11 @@ class SourceResponse(BaseModel):
 
     @classmethod
     def from_dto(
-        cls, dto: SourceDTO, *, error_message: str | None = None
+        cls,
+        dto: SourceDTO,
+        *,
+        error_message: str | None = None,
+        inbox_label: str | None = None,
     ) -> "SourceResponse":
         return cls(
             id=dto.id,
@@ -58,6 +66,8 @@ class SourceResponse(BaseModel):
             visible_in_inbox=dto.visible_in_inbox,
             summary_payload=dto.summary_payload,
             destination_type=dto.destination_type,
+            approved_classification_gate_id=dto.approved_classification_gate_id,
+            inbox_label=inbox_label,
             documented_at=dto.documented_at,
             deleted_at=dto.deleted_at,
             error_message=error_message,

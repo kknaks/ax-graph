@@ -2,20 +2,49 @@
 "use client";
 
 import {
-  INBOX_FILTER_STATUSES,
-  STATUS_LABELS,
+  inboxDisplay,
+  type InboxDisplay,
   type Source,
-  type SourceStatus,
 } from "@/lib/api-client/sources";
 import { formatTime } from "@/lib/format";
-import { SourceStatusBadge } from "@/components/source-status-badge";
 
-export type StatusFilter = "all" | SourceStatus;
+/** 문서함 3탭: inbox(게이트 전) | 승인(게이트 진입 후 대기) | 완료(documented). */
+export type StatusFilter = "inbox" | "approval" | "documented";
+
+// 파생 라벨 tone → 시안 tier 색 (배지 inline style).
+const TONE_STYLE: Record<InboxDisplay["tone"], React.CSSProperties> = {
+  ok: { background: "hsl(var(--tier-ok) / .15)", color: "hsl(var(--tier-ok))" },
+  progress: { background: "hsl(var(--tier-caution) / .15)", color: "hsl(var(--tier-caution))" },
+  danger: { background: "hsl(var(--tier-caution) / .15)", color: "hsl(var(--tier-caution))" },
+  neutral: { background: "hsl(var(--secondary))", color: "hsl(var(--secondary-foreground))" },
+};
+
+/** 파이프라인 단계 배지 — inbox_label(파생) 우선 한국어. summarized 가 "요약 완료"에 머물지 않고 "분류 완료"로 진행 표시. */
+function StageBadge({ source }: { source: Source }) {
+  const { text, tone } = inboxDisplay(source);
+  return (
+    <span
+      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+      style={TONE_STYLE[tone]}
+    >
+      {text}
+    </span>
+  );
+}
 
 const FILTERS: { value: StatusFilter; label: string }[] = [
-  { value: "all", label: "전체" },
-  ...INBOX_FILTER_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] })),
+  { value: "inbox", label: "inbox" },
+  { value: "approval", label: "승인" },
+  { value: "documented", label: "완료" },
 ];
+
+/** 탭 분류: documented=완료, inbox_label 있으면 승인 게이트 대기, 없으면 아직 인박스. */
+function inTab(source: Source, filter: StatusFilter): boolean {
+  if (filter === "documented") return source.status === "documented";
+  if (source.status === "documented") return false;
+  const inGate = !!source.inbox_label;
+  return filter === "approval" ? inGate : !inGate;
+}
 
 /** 수신 채널 문구 (시안: "slack · #ax-links" / "manual"). */
 function channelLabel(source: Source): string {
@@ -46,6 +75,8 @@ export function SourceList({
   onOpenModal: () => void;
   onRetry: (source: Source, note?: string) => void;
 }) {
+  // 서버는 visible 목록 전체를 주고, inbox/승인 구분은 inbox_label 로 클라이언트에서 나눈다.
+  const visible = sources.filter((s) => inTab(s, filter));
   return (
     <section className="h-fit rounded-lg border border-border bg-card text-card-foreground shadow-sm">
       {/* 헤더 — 제목 + Direct Inbox 모달 열기 (U-3) */}
@@ -64,7 +95,7 @@ export function SourceList({
             <path d="M22 12h-6l-2 3h-4l-2-3H2" />
             <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
           </svg>
-          <h2 className="text-sm font-semibold">Source Inbox</h2>
+          <h2 className="text-sm font-semibold">문서함</h2>
         </div>
         <button
           type="button"
@@ -83,7 +114,7 @@ export function SourceList({
           >
             <path d="M5 12h14M12 5v14" />
           </svg>
-          Inbox에 넣기
+          inbox
         </button>
       </div>
 
@@ -122,17 +153,33 @@ export function SourceList({
           </p>
         )}
 
-        {!loading && !error && sources.length === 0 && (
+        {!loading && !error && visible.length === 0 && (
           <p className="rounded-md border border-dashed border-border bg-secondary/30 px-3 py-8 text-center text-xs leading-relaxed text-muted-foreground">
-            받은 소스가 없습니다.
-            <br />
-            <span className="font-mono text-[10px]">Inbox에 넣기</span>로 URL을 담아보세요.
+            {filter === "documented" ? (
+              <>
+                문서화 완료된 항목이 없습니다.
+                <br />
+                게이트를 <span className="font-mono text-[10px]">승인</span>하면 여기에서 확정 문서를 확인할 수 있어요.
+              </>
+            ) : filter === "approval" ? (
+              <>
+                승인 게이트에 대기 중인 항목이 없습니다.
+                <br />
+                요약 완료 후 <span className="font-mono text-[10px]">분류</span>를 시작하면 여기로 옮겨집니다.
+              </>
+            ) : (
+              <>
+                문서함이 비어 있습니다.
+                <br />
+                <span className="font-mono text-[10px]">inbox</span>로 URL을 담아보세요.
+              </>
+            )}
           </p>
         )}
 
         {!loading &&
           !error &&
-          sources.map((source) => {
+          visible.map((source) => {
             const active = source.id === selectedId;
             const failed = source.status === "collection_failed";
             return (
@@ -151,7 +198,7 @@ export function SourceList({
                   <span className="truncate text-[10px] font-medium text-muted-foreground">
                     {channelLabel(source)}
                   </span>
-                  <SourceStatusBadge status={source.status} />
+                  <StageBadge source={source} />
                 </div>
                 <div className="mt-1 truncate text-xs font-medium">
                   {source.summary_payload?.title || source.source_url}

@@ -32,6 +32,7 @@ def _to_dto(row: Source) -> SourceDTO:
         visible_in_inbox=row.visible_in_inbox,
         summary_payload=row.summary_payload or {},
         destination_type=row.destination_type,
+        approved_classification_gate_id=row.approved_classification_gate_id,
         documented_at=row.documented_at,
         deleted_at=row.deleted_at,
         metadata=row.metadata_ or {},
@@ -180,6 +181,55 @@ class SourceRepository:
         if status == "deleted":
             row.deleted_at = utcnow()
         await self._session.flush()
+        return _to_dto(row)
+
+    async def set_classification_destination(
+        self,
+        source_id: uuid.UUID,
+        *,
+        destination_type: str,
+        gate_id: uuid.UUID,
+        archived: bool,
+    ) -> SourceDTO:
+        """분류 승인 부수효과 (AXKG-SPEC-001 U-3): destination 확정 + 승인 게이트 포인터.
+
+        destination=archive면 source를 `archived`로 종료(Inbox에서 숨김). 그 외
+        (project/area/resource)는 `summarized` 유지 — 문서화 게이트가 이어진다.
+        """
+        row = await self._require_row(source_id)
+        row.destination_type = destination_type
+        row.approved_classification_gate_id = gate_id
+        if archived:
+            row.status = "archived"
+            row.visible_in_inbox = False
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def reset_classification(self, source_id: uuid.UUID) -> SourceDTO:
+        """재분류 재오픈 시 destination 확정을 리셋한다 (AXKG-SPEC-002 §5).
+
+        `destination_type`·`approved_classification_gate_id`를 null로 되돌린다. status는
+        건드리지 않는다 — source는 `summarized` 그대로 두고 분류 게이트만 다시 regenerating이
+        된다(분류 내내 summarized 유지, SPEC-001 매핑표).
+        """
+        row = await self._require_row(source_id)
+        row.destination_type = None
+        row.approved_classification_gate_id = None
+        await self._session.flush()
+        return _to_dto(row)
+
+    async def mark_documented(self, source_id: uuid.UUID) -> SourceDTO:
+        """문서화 게이트 승인 apply 완료 시 source를 documented로 종료한다 (SPEC-001 상태도).
+
+        Inbox에서 숨기고(visible_in_inbox=False) documented_at을 남긴다. 멱등: 이미
+        documented면 그대로 둔다.
+        """
+        row = await self._require_row(source_id)
+        if row.status != "documented":
+            row.status = "documented"
+            row.visible_in_inbox = False
+            row.documented_at = utcnow()
+            await self._session.flush()
         return _to_dto(row)
 
     async def set_summary(

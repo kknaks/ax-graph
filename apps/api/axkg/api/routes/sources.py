@@ -21,6 +21,7 @@ from axkg.core.database import get_session
 from axkg.core.security import get_current_user
 from axkg.dto.auth import UserDTO
 from axkg.integrations.open_kknaks import OpenKknaksClient
+from axkg.schemas.gates import GateListResponse, GateResponse
 from axkg.schemas.sources import (
     AiTaskResponse,
     ManualSourceRequest,
@@ -29,6 +30,13 @@ from axkg.schemas.sources import (
     SourceListResponse,
     SourceResponse,
     SummaryFeedbackRequest,
+)
+from axkg.services.classification_gate_execution import execute_classification_gate
+from axkg.services.gates import (
+    GateAlreadyApprovedError,
+    GateNotFoundError,
+    GateService,
+    SourceNotSummarizedError,
 )
 from axkg.services.sources import (
     CollectionRetryNotAllowedError,
@@ -124,7 +132,13 @@ async def list_sources(
     session: AsyncSession = Depends(get_session),
 ) -> SourceListResponse:
     sources = await SourceService(session).list(status=status)
-    return SourceListResponse(sources=[SourceResponse.from_dto(s) for s in sources])
+    # Inbox 큐 라벨(classify_*)은 분류 게이트 상태와 조합한 파생값이다(SPEC-001 매핑표).
+    labels = await GateService(session).derive_inbox_labels(sources)
+    return SourceListResponse(
+        sources=[
+            SourceResponse.from_dto(s, inbox_label=labels.get(s.id)) for s in sources
+        ]
+    )
 
 
 @router.get("/{source_id}", response_model=SourceResponse)
@@ -136,7 +150,10 @@ async def get_source(
         source, error_message = await SourceService(session).get_detail(source_id)
     except SourceNotFoundError:
         raise _not_found(source_id)
-    return SourceResponse.from_dto(source, error_message=error_message)
+    labels = await GateService(session).derive_inbox_labels([source])
+    return SourceResponse.from_dto(
+        source, error_message=error_message, inbox_label=labels.get(source.id)
+    )
 
 
 @router.post("/{source_id}/queue-collection", response_model=SourceResponse)
@@ -218,31 +235,68 @@ async def summary_feedback(
     return SourceResponse.from_dto(result.source)
 
 
-@router.post("/{source_id}/classification-gates", response_model=SourceResponse)
+@router.post("/{source_id}/classification-gates", response_model=GateResponse, status_code=201)
 async def classification_gates(
     source_id: uuid.UUID,
+    request: Request,
+    background: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
-) -> SourceResponse:
-    """[분류] 게이트 진입 트리거 자리 (SPEC-001 §4 · FE T-017 호출 계약).
+) -> GateResponse:
+    """[분류] 게이트 진입 트리거 (SPEC-001 U-3 · SPEC-002 · FE T-017 호출 계약).
 
-    분류 AI 실행·md 변환은 WP3 범위다 — 이 스텁은 계약 표면(경로/전제조건)만 고정하고
-    실제 분류를 실행하지 않는다. summarized source에서만 진입 가능함을 검증한 뒤 아직
-    미구현(WP3)임을 CLASSIFICATION_NOT_IMPLEMENTED로 신호한다. 과구현 금지.
+    summarized source에서만 분류 게이트 + 첫 revision을 만들고 generate task를 큐잉한다
+    (source.status는 summarized 유지 — 파생 라벨만 바뀜). commit 먼저 → background로 실제
+    분류 AI 실행을 연결한다(open-kknaks 미구성 시 큐만 남는다). 응답은 생성된 분류 게이트로,
+    FE가 status를 폴링한다.
     """
+    service = GateService(session)
     try:
-        source = await SourceService(session).get(source_id)
-    except SourceNotFoundError:
+        result = await service.create_classification_gate(source_id)
+    except GateNotFoundError:
         raise _not_found(source_id)
-    if source.status != "summarized":
+    except SourceNotSummarizedError:
         raise _error(
             409,
             "CLASSIFICATION_NOT_ALLOWED",
             "요약이 완료된 항목만 분류를 시작할 수 있습니다.",
         )
-    raise _error(
-        501,
-        "CLASSIFICATION_NOT_IMPLEMENTED",
-        "분류 실행은 아직 준비 중입니다(WP3).",
+    except GateAlreadyApprovedError:
+        raise _error(
+            409,
+            "GATE_ALREADY_APPROVED",
+            "승인된 게이트는 변경할 수 없습니다. 새 revision을 만들어 주세요.",
+        )
+    client = _open_kknaks_client(request)
+    if client is not None:
+        # background가 커밋된 queued task를 읽도록 먼저 커밋한다(yield-teardown보다 먼저 실행됨).
+        await session.commit()
+        background.add_task(
+            execute_classification_gate,
+            result.ai_task.id,
+            result.gate.id,
+            result.revision.id,
+            client=client,
+            session_factory=_summary_session_factory(request),
+        )
+    return GateResponse.from_dto(result.gate, active_revision=result.revision)
+
+
+@router.get("/{source_id}/gates", response_model=GateListResponse)
+async def list_source_gates(
+    source_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> GateListResponse:
+    """source의 게이트 + revision 목록 (SPEC-002 GET /sources/{id}/gates, 버전 badge용)."""
+    try:
+        await SourceService(session).get(source_id)  # 404 보장
+    except SourceNotFoundError:
+        raise _not_found(source_id)
+    gates = await GateService(session).list_gates(source_id)
+    return GateListResponse(
+        gates=[
+            GateResponse.from_dto(gate, revisions=revisions)
+            for gate, revisions in gates
+        ]
     )
 
 

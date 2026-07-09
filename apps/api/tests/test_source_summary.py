@@ -677,16 +677,33 @@ async def test_summary_feedback_route_rejects_empty_feedback(
     assert res.status_code == 422
 
 
-async def test_classify_route_stub_not_implemented(
+async def test_classify_route_creates_gate(
     client: AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # [분류] 트리거 자리 — summarized 전제만 검증하고 WP3 미구현을 신호한다(과구현 금지).
+    # [분류] 트리거 — WP3 Phase 1: summarized source에 분류 게이트를 생성한다(과거 501 스텁 교체).
+    # client(open-kknaks) 미구성이라 background 실행은 붙지 않고 게이트/queued task만 남는다.
     source_id = await _summarize_once(session_factory)
     headers = await _auth_headers(client)
     res = await client.post(f"/sources/{source_id}/classification-gates", headers=headers)
-    assert res.status_code == 501
-    assert res.json()["detail"]["error_code"] == "CLASSIFICATION_NOT_IMPLEMENTED"
+    assert res.status_code == 201
+    body = res.json()
+    assert body["gate_kind"] == "classification"
+    assert body["status"] == "generating"
+    assert body["active_revision"]["version"] == 1
+
+
+async def test_classify_route_rejects_non_summarized(
+    client: AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        source_id = await _new_source(session)  # received
+        await session.commit()
+    headers = await _auth_headers(client)
+    res = await client.post(f"/sources/{source_id}/classification-gates", headers=headers)
+    assert res.status_code == 409
+    assert res.json()["detail"]["error_code"] == "CLASSIFICATION_NOT_ALLOWED"
 
 
 async def test_manual_route_triggers_summary_when_client_present(

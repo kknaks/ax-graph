@@ -16,11 +16,6 @@ const NAV_ITEMS = [
     ),
   },
   {
-    href: "/approval",
-    label: "승인",
-    icon: <path d="M20 6 9 17l-5-5" />,
-  },
-  {
     href: "/graph",
     label: "그래프",
     icon: (

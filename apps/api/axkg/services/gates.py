@@ -1,1 +1,910 @@
-"""분류/문서화 게이트 lifecycle, feedback, revision 승인, 재분류 재오픈 (AXKG-SPEC-001/002/004). WP3."""
+"""분류/문서화 게이트 lifecycle, feedback, revision 승인 (AXKG-SPEC-001/002/004). WP3 Phase 1.
+
+이 Phase는 **분류 게이트(②)**를 실물로 만든다. 상태 기계는 AXKG-SPEC-002 §4/§5가 SSOT다:
+게이트 생성 → review_pending → approved, 피드백 → regenerate(v2) → v1 superseded, 승인 immutable,
+실패 → retry. 3층 상태(gate.status 사용자 표시 / revision.status 제안 버전 / ai_task.status
+실행)를 섞지 않는다.
+
+task 큐잉만 여기서(SourceService와 동일하게 AiTaskRepository + resolve_execution_config 직접
+사용) 하고, open-kknaks 실행은 오케스트레이터(classification_gate_execution)가 background로 돈다.
+
+Phase 2(WP3): 분류 승인 시 문서화 게이트를 **생성(generating) + 초안 task 큐잉**하고
+(regenerate/retry도 gate_kind로 분기), 실행은 오케스트레이터(documentation_gate_execution)가
+background로 돈다. 범위 제외: Apply Executor(Phase 3 — 승인→파일 확정·`documented` 전이),
+재분류 재오픈(Phase 4). 문서화 게이트 approve→apply는 아직 하지 않는다(초안 생성·검토·재생성까지).
+"""
+from __future__ import annotations
+
+import uuid
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from axkg.dto.ai import AiTaskDTO
+from axkg.dto.gate import (
+    ApprovalGateDTO,
+    ApprovalGateRevisionDTO,
+    GateFeedbackDTO,
+)
+from axkg.repositories.ai_task_definitions import AiTaskDefinitionRepository
+from axkg.repositories.ai_tasks import AiTaskRepository
+from axkg.repositories.gates import GateRepository
+from axkg.repositories.settings import SettingRepository
+from axkg.repositories.sources import SourceRepository
+from axkg.config import settings
+from axkg.services.ai.classification_gate import empty_classification_payload
+from axkg.services.ai.documentation_gate import empty_documentation_payload
+from axkg.services.ai.resolution import resolve_execution_config
+from axkg.storage.markdown_root import MarkdownRoot
+from axkg.workers.apply_executor import ApplyExecutor, ApplyValidationError
+
+GATE_KIND_CLASSIFICATION = "classification"
+GATE_KIND_DOCUMENTATION = "documentation"
+GENERATE_TASK = "generate_classification_gate"
+REGENERATE_TASK = "regenerate_classification_gate"
+GENERATE_DOC_TASK = "generate_documentation_gate"
+REGENERATE_DOC_TASK = "regenerate_documentation_gate"
+CLASSIFICATION_FORM_VERSION = "classification.v1"
+DOCUMENTATION_FORM_VERSION = "documentation.v1"
+AI_PROVIDER_SETTINGS_KEY = "ai_provider"
+
+FEEDBACK_MIN_LENGTH = 10
+FEEDBACK_MAX_LENGTH = 4000
+
+# 승인 destination이 문서화 게이트로 이어지지 않는 종료 목적지(AXKG-SPEC-001 U-3).
+ARCHIVE_DESTINATION = "archive"
+
+# 분류 파생 라벨(Inbox 큐 라벨) 매핑 — AXKG-SPEC-001 §Verification 매핑표가 SSOT.
+# DB에 저장하지 않는 파생값이다(sources.status + 분류 게이트 상태 조합).
+_CLASSIFY_PENDING_GATE_STATUSES = ("generating", "review_pending", "feedback_pending")
+
+
+# 문서화 게이트 표시 상태(파생) 매핑 — AXKG-SPEC-004 State/Lifecycle 표가 SSOT.
+# 저장 SSOT는 공통 approval_gates.status. 표시 라벨은 새 저장 상태를 만들지 않는다.
+_DOCUMENTATION_STATUS_LABELS = {
+    "not_started": "draft_generating",
+    "generating": "draft_generating",
+    "regenerating": "draft_generating",
+    "review_pending": "draft_ready",
+    "feedback_pending": "feedback_submitted",
+    "failed": "failed",
+    "cancelled": "reclassification_requested",
+    "approved": "approved",
+}
+
+
+def derive_documentation_status(gate_status: str) -> str | None:
+    """문서화 게이트 저장 status → UI 표시 상태(파생, AXKG-SPEC-004 매핑표)."""
+    return _DOCUMENTATION_STATUS_LABELS.get(gate_status)
+
+
+def derive_inbox_label(
+    source_status: str, classification_gate_status: str | None
+) -> str | None:
+    """summarized source + 분류 게이트 상태 → Inbox 큐 라벨(AXKG-SPEC-001 매핑표).
+
+    매핑되지 않는 조합(게이트 없음/failed/not_started/cancelled, summarized 아님)은 None —
+    임의 라벨을 발명하지 않는다. 문서화 라벨(doc_*)은 Phase 2 소관이라 여기서 만들지 않는다.
+    """
+    if source_status != "summarized" or classification_gate_status is None:
+        return None
+    if classification_gate_status in _CLASSIFY_PENDING_GATE_STATUSES:
+        return "classify_pending"
+    if classification_gate_status == "regenerating":
+        return "classify_regenerating"
+    if classification_gate_status == "approved":
+        return "classify_approved"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 에러 (Case Matrix — AXKG-SPEC-002/001)
+# ---------------------------------------------------------------------------
+
+
+class GateNotFoundError(Exception):
+    def __init__(self, gate_id: uuid.UUID) -> None:
+        super().__init__(f"approval_gate not found: {gate_id}")
+        self.gate_id = gate_id
+
+
+class SourceNotSummarizedError(Exception):
+    """summarized가 아닌 source에 분류 게이트 생성 (Case Matrix: CLASSIFICATION_NOT_ALLOWED)."""
+
+    def __init__(self, source_id: uuid.UUID, status: str) -> None:
+        super().__init__(f"classification not allowed: source {source_id} status={status}")
+        self.source_id = source_id
+        self.status = status
+
+
+class FeedbackTooShortError(Exception):
+    """피드백 길이 부족 (Case Matrix: FEEDBACK_TOO_SHORT)."""
+
+
+class GateAlreadyApprovedError(Exception):
+    """승인된 게이트 수정 시도 (Case Matrix: GATE_ALREADY_APPROVED)."""
+
+    def __init__(self, gate_id: uuid.UUID) -> None:
+        super().__init__(f"gate already approved: {gate_id}")
+        self.gate_id = gate_id
+
+
+class StaleGateVersionError(Exception):
+    """오래된 버전 승인 시도 / active revision이 승인 가능 상태가 아님 (Case Matrix: STALE_GATE_VERSION)."""
+
+
+class GateRetryNotAllowedError(Exception):
+    """재시도 불가 상태 (Case Matrix: RETRY_NOT_ALLOWED)."""
+
+    def __init__(self, gate_id: uuid.UUID, status: str) -> None:
+        super().__init__(f"retry not allowed: gate {gate_id} status={status}")
+        self.gate_id = gate_id
+        self.status = status
+
+
+class DraftMarkdownNotFoundError(Exception):
+    """초안 markdown 전문 없음 (Case Matrix: DRAFT_MARKDOWN_NOT_FOUND)."""
+
+    def __init__(self, source_id: uuid.UUID, draft_version: int) -> None:
+        super().__init__(
+            f"draft markdown not found: source {source_id} v{draft_version}"
+        )
+        self.source_id = source_id
+        self.draft_version = draft_version
+
+
+class NotThisDestinationReasonMissingError(Exception):
+    """"이 destination이 아님" 피드백에 이유 누락 (Case Matrix: MISSING_NOT_THIS_DESTINATION_REASON)."""
+
+
+class ReclassificationNotAllowedError(Exception):
+    """재분류 재오픈 불가 상태: 대상이 문서화 게이트가 아니거나 분류 게이트가 approved가 아님.
+
+    (SPEC-004 Validation: 대상 게이트가 문서화 게이트이고 그 source의 분류 게이트가 approved.
+    전용 Case Matrix 코드는 없어 RECLASSIFICATION_NOT_ALLOWED로 표면화 — 리포트 OQ 참조.)
+    """
+
+    def __init__(self, gate_id: uuid.UUID, reason: str) -> None:
+        super().__init__(f"reclassification not allowed: gate {gate_id} ({reason})")
+        self.gate_id = gate_id
+        self.reason = reason
+
+
+# ---------------------------------------------------------------------------
+# 결과 컨테이너
+# ---------------------------------------------------------------------------
+
+
+class GateTaskResult:
+    """게이트 + 대상 revision + queued ai_task (생성/재생성/재시도 공통)."""
+
+    def __init__(
+        self,
+        gate: ApprovalGateDTO,
+        revision: ApprovalGateRevisionDTO,
+        ai_task: AiTaskDTO,
+    ) -> None:
+        self.gate = gate
+        self.revision = revision
+        self.ai_task = ai_task
+
+
+class FeedbackResult:
+    def __init__(self, gate: ApprovalGateDTO, feedback: GateFeedbackDTO) -> None:
+        self.gate = gate
+        self.feedback = feedback
+
+
+class ApproveResult:
+    """분류 승인 결과 — 확정 destination + (해당 시) 생성·큐잉된 문서화 게이트.
+
+    documentation_task는 문서화 초안 생성을 위해 큐잉된 task(+게이트/revision)다. 라우트가
+    이걸 background(execute_documentation_gate)로 스케줄링한다(WP3 Phase 2). archive면 None.
+    """
+
+    def __init__(
+        self,
+        gate: ApprovalGateDTO,
+        *,
+        destination_type: str,
+        archived: bool,
+        documentation_gate: ApprovalGateDTO | None,
+        documentation_task: "GateTaskResult | None" = None,
+    ) -> None:
+        self.gate = gate
+        self.destination_type = destination_type
+        self.archived = archived
+        self.documentation_gate = documentation_gate
+        self.documentation_task = documentation_task
+
+
+class ReclassificationResult:
+    """재분류 재오픈 결과 — cancelled된 문서화 게이트 + 재오픈·재생성 큐잉된 분류 게이트.
+
+    classification_task는 분류 게이트를 다시 regenerating으로 만들고 재분류 이유를 반영한 v2
+    revision + regenerate_classification_gate task를 큐잉한 것이다. 라우트가 이걸
+    background(execute_classification_gate)로 스케줄링한다(regenerate 경로 재사용).
+    """
+
+    def __init__(
+        self,
+        *,
+        documentation_gate: ApprovalGateDTO,
+        classification_task: "GateTaskResult",
+    ) -> None:
+        self.documentation_gate = documentation_gate
+        self.classification_task = classification_task
+
+
+class DocumentationGateView:
+    """문서화 게이트 조회 뷰(AXKG-SPEC-004 Data Contract) — ApprovalGate(documentation) 파생.
+
+    status는 저장 status가 아니라 표시 상태(파생 라벨)다. destination_type은 source 확정값.
+    """
+
+    def __init__(
+        self,
+        gate: ApprovalGateDTO,
+        *,
+        source_id: uuid.UUID,
+        destination_type: str | None,
+        display_status: str | None,
+        active_revision: ApprovalGateRevisionDTO | None,
+    ) -> None:
+        self.gate = gate
+        self.source_id = source_id
+        self.destination_type = destination_type
+        self.display_status = display_status
+        self.active_revision = active_revision
+
+
+class GateService:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._gates = GateRepository(session)
+        self._sources = SourceRepository(session)
+        self._tasks = AiTaskRepository(session)
+        self._definitions = AiTaskDefinitionRepository(session)
+        self._settings = SettingRepository(session)
+
+    # ------------------------------------------------------------------
+    # 조회
+    # ------------------------------------------------------------------
+
+    async def get_gate(self, gate_id: uuid.UUID) -> ApprovalGateDTO:
+        gate = await self._gates.get_gate(gate_id)
+        if gate is None:
+            raise GateNotFoundError(gate_id)
+        return gate
+
+    async def derive_inbox_labels(self, sources: list) -> dict[uuid.UUID, str | None]:
+        """source 목록의 Inbox 큐 라벨을 분류 게이트 상태와 조합해 파생 계산한다(batch).
+
+        DB에 저장하지 않는 파생값(AXKG-SPEC-001 매핑표). 게이트가 없는 source는 None.
+        """
+        ids = [s.id for s in sources]
+        gates = await self._gates.list_gates_by_sources_and_kind(
+            ids, GATE_KIND_CLASSIFICATION
+        )
+        by_source = {g.source_id: g.status for g in gates}
+        return {
+            s.id: derive_inbox_label(s.status, by_source.get(s.id)) for s in sources
+        }
+
+    async def get_active_revision(
+        self, gate: ApprovalGateDTO
+    ) -> ApprovalGateRevisionDTO | None:
+        if gate.active_revision_id is None:
+            return None
+        return await self._gates.get_revision(gate.active_revision_id)
+
+    async def list_gates(
+        self, source_id: uuid.UUID
+    ) -> list[tuple[ApprovalGateDTO, list[ApprovalGateRevisionDTO]]]:
+        """source의 게이트 + 각 게이트 revision 목록(버전 badge용)."""
+        gates = await self._gates.list_gates_by_source(source_id)
+        result: list[tuple[ApprovalGateDTO, list[ApprovalGateRevisionDTO]]] = []
+        for gate in gates:
+            revisions = await self._gates.list_revisions_by_gate(gate.id)
+            result.append((gate, revisions))
+        return result
+
+    # ------------------------------------------------------------------
+    # 문서화 게이트 조회 뷰 (GET /documentation-gates)
+    # ------------------------------------------------------------------
+
+    async def list_documentation_gates(self) -> list[DocumentationGateView]:
+        """project/area/resource 승인 source의 문서화 게이트 목록(조회 전용 뷰)."""
+        gates = await self._gates.list_gates_by_kind(GATE_KIND_DOCUMENTATION)
+        views: list[DocumentationGateView] = []
+        for gate in gates:
+            source = await self._sources.get(gate.source_id)
+            active = await self.get_active_revision(gate)
+            views.append(
+                DocumentationGateView(
+                    gate,
+                    source_id=gate.source_id,
+                    destination_type=source.destination_type if source else None,
+                    display_status=derive_documentation_status(gate.status),
+                    active_revision=active,
+                )
+            )
+        return views
+
+    async def get_documentation_draft_markdown(
+        self, source_id: uuid.UUID, draft_version: int
+    ) -> str:
+        """초안 `.md` 전문 조회(document_draft.markdown_full). 없으면 DRAFT_MARKDOWN_NOT_FOUND."""
+        gate = await self._gates.get_gate_by_source_and_kind(
+            source_id, GATE_KIND_DOCUMENTATION
+        )
+        if gate is None:
+            raise DraftMarkdownNotFoundError(source_id, draft_version)
+        for revision in await self._gates.list_revisions_by_gate(gate.id):
+            if revision.version != draft_version:
+                continue
+            form = revision.payload.get("form") or {}
+            markdown = (form.get("document_draft") or {}).get("markdown_full")
+            if markdown:
+                return markdown
+            raise DraftMarkdownNotFoundError(source_id, draft_version)
+        raise DraftMarkdownNotFoundError(source_id, draft_version)
+
+    # ------------------------------------------------------------------
+    # 분류 게이트 생성 (POST /sources/{id}/classification-gates)
+    # ------------------------------------------------------------------
+
+    async def create_classification_gate(
+        self, source_id: uuid.UUID
+    ) -> GateTaskResult:
+        """summarized source에 분류 게이트 + 첫 revision 생성 + generate task 큐잉.
+
+        source.status는 `summarized` 그대로 둔다(파생 라벨만 바뀜, SPEC-001 매핑표). 이미
+        분류 게이트가 있고 승인됐으면 GATE_ALREADY_APPROVED, 그 외에는 다음 버전 revision을
+        새로 만들어 재생성한다.
+        """
+        source = await self._sources.get(source_id)
+        if source is None:
+            raise GateNotFoundError(source_id)
+        if source.status != "summarized":
+            raise SourceNotSummarizedError(source_id, source.status)
+
+        gate = await self._gates.get_gate_by_source_and_kind(
+            source_id, GATE_KIND_CLASSIFICATION
+        )
+        if gate is None:
+            gate = await self._gates.create_gate(
+                source_id=source_id,
+                gate_kind=GATE_KIND_CLASSIFICATION,
+                status="not_started",
+            )
+        elif gate.status == "approved":
+            raise GateAlreadyApprovedError(gate.id)
+
+        version = await self._gates.next_version(gate.id)
+        revision = await self._gates.create_revision(
+            gate_id=gate.id,
+            version=version,
+            status="drafting",
+            payload=empty_classification_payload(source),
+            form_schema_version="classification.v1",
+        )
+        task = await self._enqueue_task(
+            GENERATE_TASK,
+            source_id=source_id,
+            gate_id=gate.id,
+            revision_id=revision.id,
+        )
+        revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
+        gate = await self._gates.update_gate(
+            gate.id,
+            status="generating",
+            active_revision_id=revision.id,
+            last_ai_task_id=task.id,
+        )
+        return GateTaskResult(gate, revision, task)
+
+    # ------------------------------------------------------------------
+    # feedback (POST /gates/{id}/feedback)
+    # ------------------------------------------------------------------
+
+    async def submit_feedback(
+        self, gate_id: uuid.UUID, *, body: str
+    ) -> FeedbackResult:
+        """피드백 저장 + gate review_pending→feedback_pending. 승인된 게이트는 거부."""
+        gate = await self.get_gate(gate_id)
+        if gate.status == "approved":
+            raise GateAlreadyApprovedError(gate_id)
+
+        text = (body or "").strip()
+        if len(text) < FEEDBACK_MIN_LENGTH or len(text) > FEEDBACK_MAX_LENGTH:
+            raise FeedbackTooShortError
+
+        target_revision_id = gate.active_revision_id
+        if target_revision_id is None:
+            # 검토할 active revision이 없으면 피드백 대상이 없다(재시도로 다시 생성해야 함).
+            raise StaleGateVersionError
+        feedback = await self._gates.create_feedback(
+            gate_id=gate_id,
+            target_revision_id=target_revision_id,
+            body=text,
+        )
+        gate = await self._gates.update_gate(gate_id, status="feedback_pending")
+        return FeedbackResult(gate, feedback)
+
+    # ------------------------------------------------------------------
+    # 재분류 재오픈 ("이 destination이 아님", POST /gates/{doc_id}/feedback 확장)
+    # ------------------------------------------------------------------
+
+    async def request_reclassification(
+        self, doc_gate_id: uuid.UUID, *, reason: str
+    ) -> ReclassificationResult:
+        """문서화 게이트 "이 destination이 아님" 피드백 → 분류 게이트 재오픈 (SPEC-002 §5 / SPEC-004 S-3).
+
+        원자적 전이(한 트랜잭션):
+        - 분류 게이트: status `approved → regenerating`(유일 예외 전이), `approved_revision_id` 해제.
+        - 기존 approved 분류 revision: 내용 불변으로 `superseded` 마킹.
+        - source: `destination_type`·`approved_classification_gate_id` 리셋(null).
+        - 문서화 게이트: `cancelled`(표시 상태 reclassification_requested).
+        - 재분류 이유를 담은 새 분류 revision(v_next) 생성 + `regenerate_classification_gate`
+          task 큐잉(regenerate 경로 재사용 — 이유를 feedback/context로 전달, resume 세션 승계).
+
+        거부:
+        - 이유 누락 → MISSING_NOT_THIS_DESTINATION_REASON.
+        - 대상이 문서화 게이트가 아님 / 분류 게이트가 approved 아님 → RECLASSIFICATION_NOT_ALLOWED.
+        - 이미 승인(apply 완료)된 문서화 게이트 → GATE_ALREADY_APPROVED.
+        """
+        doc_gate = await self.get_gate(doc_gate_id)
+        if doc_gate.gate_kind != GATE_KIND_DOCUMENTATION:
+            raise ReclassificationNotAllowedError(doc_gate_id, "not_documentation_gate")
+        if doc_gate.status == "approved":
+            raise GateAlreadyApprovedError(doc_gate_id)
+
+        text = (reason or "").strip()
+        if not text:
+            raise NotThisDestinationReasonMissingError
+
+        cls_gate = await self._gates.get_gate_by_source_and_kind(
+            doc_gate.source_id, GATE_KIND_CLASSIFICATION
+        )
+        if (
+            cls_gate is None
+            or cls_gate.status != "approved"
+            or cls_gate.approved_revision_id is None
+        ):
+            raise ReclassificationNotAllowedError(doc_gate_id, "classification_not_approved")
+        approved_rev = await self._gates.get_revision(cls_gate.approved_revision_id)
+        if approved_rev is None:
+            raise ReclassificationNotAllowedError(doc_gate_id, "classification_not_approved")
+
+        source = await self._require_source(cls_gate.source_id)
+
+        # 재분류 이유를 분류 게이트 feedback으로 감사 기록(대상=기존 approved revision).
+        feedback = await self._gates.create_feedback(
+            gate_id=cls_gate.id,
+            target_revision_id=approved_rev.id,
+            body=text,
+            payload={
+                "kind": "not_this_destination",
+                "not_this_destination_reason": text,
+                "documentation_gate_id": str(doc_gate_id),
+            },
+        )
+
+        # 기존 approved 분류 revision: 내용 불변으로 superseded 마킹(payload 수정 금지).
+        await self._gates.update_revision(approved_rev.id, status="superseded")
+
+        # source destination 확정 리셋.
+        await self._sources.reset_classification(cls_gate.source_id)
+
+        # 문서화 게이트 cancelled(감사 이력 보존, 표시 상태 reclassification_requested).
+        doc_gate = await self._gates.update_gate(doc_gate_id, status="cancelled")
+
+        # 재분류 이유를 담은 새 분류 revision(v_next) + regenerate task(regenerate 경로 재사용).
+        resume_session = await self._resolve_resume_session(approved_rev)
+        version = await self._gates.next_version(cls_gate.id)
+        revision = await self._gates.create_revision(
+            gate_id=cls_gate.id,
+            version=version,
+            status="drafting",
+            payload=empty_classification_payload(source),
+            form_schema_version=CLASSIFICATION_FORM_VERSION,
+            parent_revision_id=approved_rev.id,
+            feedback_id=feedback.id,
+        )
+        task = await self._enqueue_task(
+            REGENERATE_TASK,
+            source_id=cls_gate.source_id,
+            gate_id=cls_gate.id,
+            revision_id=revision.id,
+            feedback=text,
+            prior_payload=approved_rev.payload,
+            resume_session=resume_session,
+            resume_of_task_id=approved_rev.ai_task_id,
+            payload_kind="classification",
+            extra_payload={"reclassification": True},
+        )
+        revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
+        await self._gates.consume_feedback(feedback.id)
+        cls_gate = await self._gates.update_gate(
+            cls_gate.id,
+            status="regenerating",
+            active_revision_id=revision.id,
+            last_ai_task_id=task.id,
+            clear_approved_revision=True,
+        )
+        return ReclassificationResult(
+            documentation_gate=doc_gate,
+            classification_task=GateTaskResult(cls_gate, revision, task),
+        )
+
+    # ------------------------------------------------------------------
+    # regenerate (POST /gates/{id}/regenerate)
+    # ------------------------------------------------------------------
+
+    async def regenerate(self, gate_id: uuid.UUID) -> GateTaskResult:
+        """제출된 feedback을 consume하고 새 revision v(n+1) + regenerate task를 큐잉한다.
+
+        resume 세션은 open-kknaks Session Rule 순서로 계산(target revision session →
+        그 revision의 ai_task session → 둘 다 없으면 stateless). gate feedback_pending→regenerating.
+        """
+        gate = await self.get_gate(gate_id)
+        if gate.status == "approved":
+            raise GateAlreadyApprovedError(gate_id)
+
+        feedback = await self._gates.get_latest_submitted_feedback(gate_id)
+        if feedback is None:
+            # 재생성하려면 소비할 피드백이 필요하다(피드백 없이 온 재생성은 최신 재확인 필요).
+            raise StaleGateVersionError
+        target_revision = await self._gates.get_revision(feedback.target_revision_id)
+        if target_revision is None:
+            raise StaleGateVersionError
+
+        source = await self._require_source(gate.source_id)
+        spec = self._gate_kind_spec(gate.gate_kind, source)
+        resume_session = await self._resolve_resume_session(target_revision)
+        version = await self._gates.next_version(gate_id)
+        revision = await self._gates.create_revision(
+            gate_id=gate_id,
+            version=version,
+            status="drafting",
+            payload=spec["empty_payload"],
+            form_schema_version=spec["form_schema_version"],
+            parent_revision_id=target_revision.id,
+            feedback_id=feedback.id,
+        )
+        task = await self._enqueue_task(
+            spec["regenerate"],
+            source_id=gate.source_id,
+            gate_id=gate_id,
+            revision_id=revision.id,
+            feedback=feedback.body,
+            prior_payload=target_revision.payload,
+            resume_session=resume_session,
+            resume_of_task_id=target_revision.ai_task_id,
+            payload_kind=spec["payload_kind"],
+            extra_payload=spec["extra_payload"],
+        )
+        revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
+        await self._gates.consume_feedback(feedback.id)
+        gate = await self._gates.update_gate(
+            gate_id,
+            status="regenerating",
+            active_revision_id=revision.id,
+            last_ai_task_id=task.id,
+        )
+        return GateTaskResult(gate, revision, task)
+
+    # ------------------------------------------------------------------
+    # approve (POST /gates/{id}/approve)
+    # ------------------------------------------------------------------
+
+    async def approve(
+        self, gate_id: uuid.UUID, *, expected_revision_id: uuid.UUID | None = None
+    ) -> ApproveResult:
+        """최신 active revision(reviewable)을 승인하고 분류 부수효과를 적용한다.
+
+        - active revision이 아닌 오래된 버전 승인은 STALE_GATE_VERSION.
+        - 이미 승인된 게이트는 GATE_ALREADY_APPROVED.
+        - active revision reviewable→approved, gate review_pending→approved,
+          approved_revision_id 설정(gate당 1개, immutable).
+        - destination 확정: source.destination_type·approved_classification_gate_id.
+          archive → source archived(종료). project/area/resource → 문서화 게이트 컨테이너만 생성.
+        """
+        gate = await self.get_gate(gate_id)
+        if gate.status == "approved":
+            raise GateAlreadyApprovedError(gate_id)
+        active_id = gate.active_revision_id
+        if active_id is None:
+            raise StaleGateVersionError
+        if expected_revision_id is not None and expected_revision_id != active_id:
+            raise StaleGateVersionError
+
+        revision = await self._gates.get_revision(active_id)
+        if revision is None or revision.status != "reviewable":
+            raise StaleGateVersionError
+
+        # 문서화 게이트 승인은 Apply Executor로 위임한다(WP3 Phase 3): 초안 확정 write +
+        # index + 엣지 rebuild + source documented + 게이트/revision approved.
+        if gate.gate_kind == GATE_KIND_DOCUMENTATION:
+            return await self._approve_documentation(gate, revision)
+
+        destination_type = (revision.payload.get("form") or {}).get("destination_type")
+        if not destination_type:
+            raise StaleGateVersionError
+
+        await self._gates.update_revision(active_id, status="approved", approved=True)
+        gate = await self._gates.update_gate(
+            gate_id, status="approved", approved_revision_id=active_id
+        )
+
+        archived = destination_type == ARCHIVE_DESTINATION
+        await self._sources.set_classification_destination(
+            gate.source_id,
+            destination_type=destination_type,
+            gate_id=gate_id,
+            archived=archived,
+        )
+
+        documentation_gate: ApprovalGateDTO | None = None
+        documentation_task: GateTaskResult | None = None
+        if not archived:
+            # Phase 2: 문서화 게이트를 생성(generating)하고 초안 생성 task를 큐잉한다.
+            # (SPEC-004 "초안은 분류 승인 시 함께 생성" — 별도 수동 트리거 없음.)
+            source = await self._require_source(gate.source_id)
+            documentation_gate = await self._gates.get_gate_by_source_and_kind(
+                gate.source_id, GATE_KIND_DOCUMENTATION
+            )
+            if documentation_gate is None:
+                documentation_gate = await self._gates.create_gate(
+                    source_id=gate.source_id,
+                    gate_kind=GATE_KIND_DOCUMENTATION,
+                    status="not_started",
+                )
+            documentation_task = await self._start_documentation_gate(
+                documentation_gate, source, destination_type
+            )
+            documentation_gate = documentation_task.gate
+        return ApproveResult(
+            gate,
+            destination_type=destination_type,
+            archived=archived,
+            documentation_gate=documentation_gate,
+            documentation_task=documentation_task,
+        )
+
+    async def _start_documentation_gate(
+        self, gate: ApprovalGateDTO, source, destination_type: str
+    ) -> GateTaskResult:
+        """문서화 게이트 첫 revision(drafting) + generate task 큐잉 → gate generating.
+
+        destination_type을 task.payload에 실어 보내 context builder가 destination→template
+        (resource→reference/area→permanent/project→project_baseline)을 선택하게 한다.
+        """
+        version = await self._gates.next_version(gate.id)
+        revision = await self._gates.create_revision(
+            gate_id=gate.id,
+            version=version,
+            status="drafting",
+            payload=empty_documentation_payload(source, destination_type),
+            form_schema_version=DOCUMENTATION_FORM_VERSION,
+        )
+        task = await self._enqueue_task(
+            GENERATE_DOC_TASK,
+            source_id=source.id,
+            gate_id=gate.id,
+            revision_id=revision.id,
+            payload_kind="documentation",
+            extra_payload={"destination_type": destination_type},
+        )
+        revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
+        gate = await self._gates.update_gate(
+            gate.id,
+            status="generating",
+            active_revision_id=revision.id,
+            last_ai_task_id=task.id,
+        )
+        return GateTaskResult(gate, revision, task)
+
+    # ------------------------------------------------------------------
+    # retry (POST /gates/{id}/retry)
+    # ------------------------------------------------------------------
+
+    async def retry(self, gate_id: uuid.UUID) -> GateTaskResult:
+        """failed gate + 마지막 ai_task failed일 때만 재시도. 새 revision + 새 ai_task.
+
+        기존 failed task/revision은 감사 이력으로 보존한다. 재생성 맥락(feedback 연결)이면
+        gate→regenerating, 최초 생성 맥락이면 gate→generating.
+        """
+        gate = await self.get_gate(gate_id)
+        if gate.status != "failed" or gate.last_ai_task_id is None:
+            raise GateRetryNotAllowedError(gate_id, gate.status)
+        failed_task = await self._tasks.get(gate.last_ai_task_id)
+        if failed_task is None or failed_task.status != "failed":
+            raise GateRetryNotAllowedError(gate_id, gate.status)
+
+        # 실패한 revision을 참조해 재생성 맥락을 이어간다(parent/feedback/resume 승계).
+        failed_revision = (
+            await self._gates.get_revision(failed_task.revision_id)
+            if failed_task.revision_id
+            else None
+        )
+        is_regenerate = failed_task.task_type in (REGENERATE_TASK, REGENERATE_DOC_TASK)
+        source = await self._require_source(gate.source_id)
+        spec = self._gate_kind_spec(gate.gate_kind, source)
+        version = await self._gates.next_version(gate_id)
+        parent_revision_id = (
+            failed_revision.parent_revision_id if failed_revision else None
+        )
+        feedback_id = failed_revision.feedback_id if failed_revision else None
+        revision = await self._gates.create_revision(
+            gate_id=gate_id,
+            version=version,
+            status="drafting",
+            payload=spec["empty_payload"],
+            form_schema_version=spec["form_schema_version"],
+            parent_revision_id=parent_revision_id,
+            feedback_id=feedback_id,
+        )
+
+        resume_session = None
+        feedback_body = None
+        prior_payload = None
+        if is_regenerate and parent_revision_id is not None:
+            parent = await self._gates.get_revision(parent_revision_id)
+            if parent is not None:
+                resume_session = await self._resolve_resume_session(parent)
+                prior_payload = parent.payload
+            feedback_body = failed_task.payload.get("feedback")
+
+        task = await self._enqueue_task(
+            failed_task.task_type,
+            source_id=gate.source_id,
+            gate_id=gate_id,
+            revision_id=revision.id,
+            retry_of_task_id=failed_task.id,
+            retry_count=failed_task.retry_count + 1,
+            feedback=feedback_body,
+            prior_payload=prior_payload,
+            resume_session=resume_session,
+            resume_of_task_id=parent_revision_id,
+            payload_kind=spec["payload_kind"],
+            extra_payload=spec["extra_payload"],
+        )
+        revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
+        gate = await self._gates.update_gate(
+            gate_id,
+            status="regenerating" if is_regenerate else "generating",
+            active_revision_id=revision.id,
+            last_ai_task_id=task.id,
+        )
+        return GateTaskResult(gate, revision, task)
+
+    # ------------------------------------------------------------------
+    # 내부 헬퍼
+    # ------------------------------------------------------------------
+
+    async def _require_source(self, source_id: uuid.UUID):
+        source = await self._sources.get(source_id)
+        if source is None:
+            raise GateNotFoundError(source_id)
+        return source
+
+    async def _approve_documentation(
+        self, gate: ApprovalGateDTO, revision: ApprovalGateRevisionDTO
+    ) -> ApproveResult:
+        """문서화 게이트 승인 → Apply Executor 실행(초안 확정 + documented, WP3 Phase 3).
+
+        검증 실패(경로/깨진 링크/duplicate)는 apply하지 않고 `ApplyValidationError`로 표면화한다
+        (라우트가 Case Matrix 에러코드로 매핑). 성공하면 revision/gate approved + source documented.
+        """
+        executor = ApplyExecutor(
+            self._session, MarkdownRoot(settings.axkg_markdown_root)
+        )
+        await executor.apply(gate, revision)
+        gate = await self.get_gate(gate.id)
+        source = await self._require_source(gate.source_id)
+        return ApproveResult(
+            gate,
+            destination_type=source.destination_type or "",
+            archived=False,
+            documentation_gate=gate,
+            documentation_task=None,
+        )
+
+    def _gate_kind_spec(self, gate_kind: str, source) -> dict:
+        """gate_kind별 재생성/재시도 조립 스펙(task type·form 버전·빈 payload·payload kind).
+
+        documentation은 destination_type을 payload에 실어(template 선택용) 보낸다. 분류는
+        Phase 1과 동일하게 유지한다(회귀 방지).
+        """
+        if gate_kind == GATE_KIND_DOCUMENTATION:
+            destination_type = source.destination_type or "resource"
+            return {
+                "generate": GENERATE_DOC_TASK,
+                "regenerate": REGENERATE_DOC_TASK,
+                "form_schema_version": DOCUMENTATION_FORM_VERSION,
+                "empty_payload": empty_documentation_payload(source, destination_type),
+                "payload_kind": "documentation",
+                "extra_payload": {"destination_type": destination_type},
+            }
+        return {
+            "generate": GENERATE_TASK,
+            "regenerate": REGENERATE_TASK,
+            "form_schema_version": CLASSIFICATION_FORM_VERSION,
+            "empty_payload": empty_classification_payload(source),
+            "payload_kind": "classification",
+            "extra_payload": {},
+        }
+
+    async def _resolve_resume_session(
+        self, target_revision: ApprovalGateRevisionDTO
+    ) -> str | None:
+        """AXKG-SPEC-002 open-kknaks Session Rule: revision session → ai_task session → None."""
+        if target_revision.open_kknaks_session_id:
+            return target_revision.open_kknaks_session_id
+        if target_revision.ai_task_id is not None:
+            task = await self._tasks.get(target_revision.ai_task_id)
+            if task is not None:
+                return task.open_kknaks_session_id
+        return None
+
+    async def _enqueue_task(
+        self,
+        task_type: str,
+        *,
+        source_id: uuid.UUID,
+        gate_id: uuid.UUID,
+        revision_id: uuid.UUID,
+        retry_of_task_id: uuid.UUID | None = None,
+        retry_count: int = 0,
+        feedback: str | None = None,
+        prior_payload: dict | None = None,
+        resume_session: str | None = None,
+        resume_of_task_id: uuid.UUID | None = None,
+        payload_kind: str = "classification",
+        extra_payload: dict | None = None,
+    ) -> AiTaskDTO:
+        """게이트 ai_task 큐잉(SourceService 미러링) — 실행 설정은 생성 시점 스냅샷.
+
+        재생성/재시도(feedback 있음)면 resume 세션을 options.resume에 배선하고 payload에
+        feedback·이전 payload(stateless fallback용)를 남긴다(AXKG-SPEC-011 Resume Wiring).
+        `extra_payload`(예: 문서화 destination_type)는 항상 payload에 병합한다 — context
+        builder가 template 선택 등에 쓴다.
+        """
+        definition = await self._definitions.get_by_key(task_type)
+        if definition is None or not definition.enabled:
+            raise LookupError(f"ai_task_definition missing: {task_type}")
+        global_settings = await self._settings.get_value(AI_PROVIDER_SETTINGS_KEY)
+        config = resolve_execution_config(global_settings, definition)
+
+        options = dict(config.options)
+        payload: dict = {}
+        if feedback is not None:
+            payload["kind"] = f"{payload_kind}_feedback"
+            payload["feedback"] = feedback
+            payload["prior_payload"] = prior_payload or {}
+            payload["resume_of_task_id"] = (
+                str(resume_of_task_id) if resume_of_task_id else None
+            )
+            if resume_session:
+                # open-kknaks claude executor 계약: options.resume={mode:session, session_id}.
+                options["resume"] = {"mode": "session", "session_id": resume_session}
+        else:
+            payload["kind"] = payload_kind
+        if extra_payload:
+            payload.update(extra_payload)
+
+        return await self._tasks.create(
+            task_type=task_type,
+            task_definition_id=definition.id,
+            provider=config.provider,
+            model=config.model,
+            options=options,
+            provider_options=config.provider_options,
+            source_id=source_id,
+            gate_id=gate_id,
+            revision_id=revision_id,
+            retry_of_task_id=retry_of_task_id,
+            retry_count=retry_count,
+            payload=payload,
+        )

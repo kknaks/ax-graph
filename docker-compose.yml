@@ -61,12 +61,16 @@ services:
     env_file:
       - .env
     environment:
-      # env_file은 ${} 치환이 안 되므로 PATH만 compose 레벨에서 조립
-      # 호스트 path 그대로 컨테이너 안에서도 매핑 — npm symlink/require 깨짐 회피
-      PATH: ${CLAUDE_LOCAL_DIR:-/home/kknaks/.local}/bin:/usr/local/bin:/usr/bin:/bin
+      # mac 로컬 검증용: darwin claude는 linux 컨테이너서 못 돌므로, setup.sh 방식으로
+      # linux 컨테이너 안에서 뽑은 linux/arm64 네이티브 claude(.claude-tools)를 마운트해 PATH로 물린다.
+      # (배포용 compose는 별도 파일 — 서버는 호스트 네이티브 claude 마운트 방식)
+      PATH: /claude-tools/node/bin:/claude-tools/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+      # claude 실행 프로젝트 = 이미지에 박힌 요약 workspace(진입 문서 CLAUDE.md/agent.md +
+      # context/source-summary-guide.md). env_file(.env)의 값보다 우선하도록 여기서 권위있게 고정.
+      WORK_DIR: /app/workspace
     volumes:
-      # 호스트의 system claude (npm install -g 결과) 를 그대로 mount
-      - ${CLAUDE_LOCAL_DIR:-/home/kknaks/.local}:${CLAUDE_LOCAL_DIR:-/home/kknaks/.local}:ro
+      # linux/arm64 node + claude(JS 아님, 네이티브 ELF) 도구 세트
+      - /Users/kknaks/.cache/axkg-live/.claude-tools:/claude-tools:ro
     depends_on:
       redis:
         condition: service_healthy

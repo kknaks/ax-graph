@@ -20,6 +20,7 @@ class SourceDTO(BaseModel):
     visible_in_inbox: bool = True
     summary_payload: dict[str, Any] = Field(default_factory=dict)
     destination_type: str | None = None
+    approved_classification_gate_id: uuid.UUID | None = None
     documented_at: datetime | None = None
     deleted_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

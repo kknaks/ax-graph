@@ -62,6 +62,21 @@ async def lifespan(app: FastAPI):
     from axkg.core.database import get_session_factory
 
     app.state.session_factory = get_session_factory()
+    # graph cache startup scan (AXKG-SPEC-005 WP2): document root의 변경분만 증분 rebuild.
+    # best-effort — root/DB 미준비(로컬/오프라인)여도 startup을 막지 않는다(POST /graph/rebuild로 수동 가능).
+    import logging
+
+    from axkg.storage.markdown_root import MarkdownRoot
+
+    if MarkdownRoot(app_settings.axkg_markdown_root).root.is_dir():
+        try:
+            from axkg.workers.graph_rebuild import run_startup_scan
+
+            await run_startup_scan(session_factory=app.state.session_factory)
+        except Exception:  # noqa: BLE001 — startup은 캐시 스캔 실패로 죽지 않는다.
+            logging.getLogger("axkg.main").warning(
+                "graph startup scan skipped (root/DB not ready)", exc_info=True
+            )
     try:
         yield
     finally:

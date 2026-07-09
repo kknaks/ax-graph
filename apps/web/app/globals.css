@@ -73,3 +73,33 @@ body {
   background: hsl(var(--border));
   border-radius: 9999px;
 }
+
+/* 문서화 게이트 ③ 초안/파생지식 접기·펴기 + diff preview (21-html section-spec-004). */
+details.draft > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details.draft > summary::-webkit-details-marker {
+  display: none;
+}
+details.draft[open] .draft-chevron {
+  transform: rotate(90deg);
+}
+.draft-chevron {
+  transition: transform 0.15s ease;
+}
+.diff-line {
+  display: block;
+  padding: 0 10px;
+}
+.diff-add {
+  background: hsl(var(--tier-ok) / 0.1);
+  color: hsl(var(--tier-ok));
+}
+.diff-del {
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+}
+.diff-meta {
+  color: hsl(var(--muted-foreground));
+}
