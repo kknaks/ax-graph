@@ -24,7 +24,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    seeds.seed_all(op.get_bind())
+    # 이 단계엔 users.role/is_active가 없다(0019에서 추가). 로스터·role 시드는 0019가
+    # seed_users로 전담하므로 여기선 role-free 기본 유저 + 나머지 seed만 넣는다.
+    conn = op.get_bind()
+    seeds.seed_base_user(conn)
+    seeds.seed_settings(conn)
+    seeds.seed_prompts(conn)
+    seeds.seed_templates(conn)
+    seeds.seed_task_definitions(conn)
 
 
 def downgrade() -> None:

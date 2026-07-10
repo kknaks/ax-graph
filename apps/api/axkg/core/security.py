@@ -80,3 +80,16 @@ async def get_current_auth(
 
 async def get_current_user(auth: AuthContextDTO = Depends(get_current_auth)) -> UserDTO:
     return auth.user
+
+
+async def require_admin(user: UserDTO = Depends(get_current_user)) -> UserDTO:
+    """admin 전용 라우트 가드 (AXKG-SPEC-008 Access Boundary Matrix).
+
+    role이 admin이 아니면 `FORBIDDEN`(403). FE 가드는 UX이고 이 가드가 실제 방어선이다.
+    """
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={"error_code": "FORBIDDEN", "message": "접근 권한이 없습니다."},
+        )
+    return user

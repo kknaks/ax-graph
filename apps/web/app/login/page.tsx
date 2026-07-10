@@ -4,6 +4,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CASE_MESSAGES, caseMessage, getToken, login, setToken } from "@/lib/api-client";
+import { defaultLanding } from "@/lib/access";
 
 /** 보호 라우트에서 넘어온 이유 (Case Matrix — App Shell 문구를 로그인 화면에서 안내) */
 const REASON_MESSAGES: Record<string, string> = {
@@ -41,7 +42,8 @@ function LoginForm() {
     try {
       const res = await login(email.trim(), password);
       setToken(res.token); // localStorage 저장 (SPEC-008 Token Storage)
-      router.replace("/"); // Source Inbox로 이동
+      // role 기본 진입 화면으로 이동 (staff=/graph, admin=Source Inbox) — SPEC-008 S-1.
+      router.replace(defaultLanding(res.user.role));
     } catch (err) {
       setError(caseMessage(err, "로그인에 실패했습니다. 잠시 후 다시 시도해 주세요."));
       setSubmitting(false);

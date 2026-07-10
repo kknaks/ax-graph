@@ -11,9 +11,14 @@ const TOKEN_STORAGE_KEY = "axkg_token";
 
 // --- 백엔드 스키마 (apps/api/axkg/schemas/auth.py) ---
 
+/** role은 admin/staff 2값 고정 (AXKG-SPEC-008 §4 Role Model). */
+export type UserRole = "admin" | "staff";
+
 export interface ApiUser {
   email: string;
   display_name: string | null;
+  /** 내비/가드 분기용 (AXKG-SPEC-008 — login·/auth/me 응답에 포함). */
+  role: UserRole;
 }
 
 export interface LoginResponse {
@@ -45,8 +50,10 @@ export class ApiError extends Error {
 /** AXKG-SPEC-008 Case Matrix — error_code → 프론트 문구 */
 export const CASE_MESSAGES: Record<string, string> = {
   INVALID_CREDENTIALS: "이메일 또는 비밀번호가 올바르지 않습니다.",
+  INACTIVE_ACCOUNT: "비활성화된 계정입니다. 관리자에게 문의하세요.",
   MISSING_TOKEN: "로그인이 필요합니다.",
   INVALID_TOKEN: "세션이 유효하지 않습니다. 다시 로그인해 주세요.",
+  FORBIDDEN: "접근 권한이 없습니다.",
   NETWORK_ERROR: "서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.",
 };
 

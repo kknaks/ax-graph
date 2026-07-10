@@ -24,9 +24,10 @@ from axkg.api.routes import (
     settings,
     prompts,
     templates,
+    users,
 )
 from axkg.config import settings as app_settings
-from axkg.core.security import get_current_auth
+from axkg.core.security import get_current_auth, require_admin
 
 
 @asynccontextmanager
@@ -101,17 +102,25 @@ app.include_router(integrations.router)
 # POST /api/v1/slack/commands — Slack 등록 Request URL 문자 일치, signing secret 보호.
 app.include_router(slack.router)
 
-_PROTECTED_ROUTERS = (
+# AXKG-SPEC-008 Access Boundary Matrix — BE 라우트 authz(실제 방어선).
+# admin 전용: 소스 inbox/수집, 분류②·문서화③ 승인 게이트, 설정, 유저 관리.
+# staff+admin(로그인만): 그래프 시각화 + 채팅④, 문서(그래프 노드) 열람.
+_ADMIN_ROUTERS = (
     sources.router,
     approval_gates.router,
     documentation_gates.router,
-    documents.router,
-    graph.router,
     settings.router,
     prompts.router,
     templates.router,
+    users.router,
 )
-for _router in _PROTECTED_ROUTERS:
+_AUTHENTICATED_ROUTERS = (
+    documents.router,
+    graph.router,
+)
+for _router in _ADMIN_ROUTERS:
+    app.include_router(_router, dependencies=[Depends(require_admin)])
+for _router in _AUTHENTICATED_ROUTERS:
     app.include_router(_router, dependencies=[Depends(get_current_auth)])
 
 

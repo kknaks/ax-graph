@@ -27,6 +27,7 @@ from axkg.dto.source_material import SourceMaterial
 from axkg.integrations.source_collection import CollectionError, collect_source
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai.context import ContextBuilder, ContextBuildError
+from axkg.services.ai.resolution import is_resume_session
 
 HANDLER_KIND = "source_summary"
 
@@ -152,10 +153,12 @@ class SourceSummaryContextBuilder(ContextBuilder):
                 "SOURCE_NOT_FOUND", "요약 task에 source_id가 없습니다."
             )
 
-        # 피드백 재요약(PLAN-005-T-016): 세션 resume 실행이라 원문 컨텍스트가 이미 세션에
-        # 있다. 원문을 다시 수집·재조립하지 않고(토큰 절약) 피드백만 블록으로 공급한다.
+        # 피드백 재요약(PLAN-005-T-016): 실제 세션 resume일 때만 원문 컨텍스트가 세션에 이미
+        # 있으므로 피드백만 공급한다(토큰 절약). 글로벌 bare resume=true + 세션 유실 조합에선
+        # 새 세션이라 원문이 없다 — 이 경우 아래 full 컨텍스트 경로로 떨어져 원문/본문과 함께
+        # 피드백을 공급한다(컨텍스트 없는 재요약 방지, PLAN-010-T-008).
         feedback = task.payload.get("feedback")
-        if feedback:
+        if feedback and is_resume_session(task.options):
             return [self._feedback_block(str(feedback))]
         source = await self._sources.get(task.source_id)
         if source is None:
@@ -209,6 +212,10 @@ class SourceSummaryContextBuilder(ContextBuilder):
                         text=f"[원문 조각 {i}/{len(chunks)} · {material.content_format}]\n{chunk}",
                     )
                 )
+        # stateless 피드백 재요약: 세션이 없어 위에서 원문/본문을 full로 다시 공급했으니,
+        # 그 컨텍스트 위에 피드백을 덧붙여 개정을 지시한다(PLAN-010-T-008).
+        if feedback:
+            blocks.append(self._feedback_block(str(feedback)))
         return blocks
 
     async def handle_result(self, task: AiTaskDTO, output: dict[str, Any]) -> None:

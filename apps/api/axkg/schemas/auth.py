@@ -10,6 +10,7 @@ class LoginRequest(BaseModel):
 class UserResponse(BaseModel):
     email: str
     display_name: str | None = None
+    role: str
 
 
 class LoginResponse(BaseModel):
@@ -22,4 +23,13 @@ class MeResponse(BaseModel):
 
 
 class LogoutResponse(BaseModel):
+    ok: bool = True
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
+class ChangePasswordResponse(BaseModel):
     ok: bool = True

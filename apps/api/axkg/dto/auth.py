@@ -9,6 +9,7 @@ class UserDTO(BaseModel):
     id: uuid.UUID
     email: str
     display_name: str | None = None
+    role: str = "staff"
 
 
 class UserCredentialsDTO(BaseModel):
@@ -17,7 +18,19 @@ class UserCredentialsDTO(BaseModel):
     id: uuid.UUID
     email: str
     display_name: str | None = None
+    role: str = "staff"
+    is_active: bool = True
     password_hash: str
+
+
+class UserAdminDTO(BaseModel):
+    """유저 관리(admin) 조회용 — password_hash는 노출하지 않는다 (AXKG-SPEC-008 §3)."""
+
+    id: uuid.UUID
+    email: str
+    display_name: str | None = None
+    role: str
+    is_active: bool
 
 
 class LoginResultDTO(BaseModel):

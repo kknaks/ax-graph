@@ -15,6 +15,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(sa.Text(), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     display_name: Mapped[str | None] = mapped_column(sa.Text())
+    # AXKG-SPEC-008: role 2값(admin/staff, 기본 staff), is_active=false면 로그인 차단.
+    role: Mapped[str] = mapped_column(sa.Text(), nullable=False, default="staff")
+    is_active: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, default=True)
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[datetime] = updated_at_col()
 

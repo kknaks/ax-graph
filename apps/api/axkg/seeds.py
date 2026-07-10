@@ -30,6 +30,34 @@ from axkg.models import (
 SEED_USER_EMAIL = "kknaks@medisolveai.com"
 SEED_USER_PASSWORD = "1234"  # AXKG-SPEC-008 개발 seed. 운영 보안 기준 아님.
 
+# AXKG-SPEC-008 Seed Data — 활성 22명 로스터(admin 3 + staff 19). email 기준 멱등.
+# 비활성 4명(박신아·최원·김사라·원영진)은 제외. department/position/source_user_id는
+# 저장하지 않는다(role 매핑 소스일 뿐). 기존 seed 계정 kknaks는 admin으로 흡수된다.
+USER_ROSTER: list[dict] = [
+    {"email": "kknaks@medisolveai.com", "display_name": "이건학", "role": "admin"},
+    {"email": "dante@medisolveai.com", "display_name": "전창원", "role": "admin"},
+    {"email": "sykim@medisolveai.com", "display_name": "김수연", "role": "admin"},
+    {"email": "dr.jinlee@kakao.com", "display_name": "이종진", "role": "staff"},
+    {"email": "imkrmin@medisolveai.com", "display_name": "임주민", "role": "staff"},
+    {"email": "srpark@medisolveai.com", "display_name": "박세림", "role": "staff"},
+    {"email": "wychoi@medisolveai.com", "display_name": "최우영", "role": "staff"},
+    {"email": "dreseul@medisolveai.com", "display_name": "한예슬", "role": "staff"},
+    {"email": "ivorycho@medisolveai.com", "display_name": "조상아", "role": "staff"},
+    {"email": "narsein@medisolveai.com", "display_name": "안덕환", "role": "staff"},
+    {"email": "a1878h@medisolveai.com", "display_name": "윤아영", "role": "staff"},
+    {"email": "cjs777@medisolveai.com", "display_name": "천수정", "role": "staff"},
+    {"email": "oasis@medisolveai.com", "display_name": "한승진", "role": "staff"},
+    {"email": "mint5948@medisolveai.com", "display_name": "박소은", "role": "staff"},
+    {"email": "jso4093@medisolveai.com", "display_name": "전소은", "role": "staff"},
+    {"email": "yg10004@medisolveai.com", "display_name": "신용진", "role": "staff"},
+    {"email": "icran@medisolveai.com", "display_name": "서형석", "role": "staff"},
+    {"email": "twin9774@medisolveai.com", "display_name": "김태우", "role": "staff"},
+    {"email": "kalmia@medisolveai.com", "display_name": "변가영", "role": "staff"},
+    {"email": "marin@medisolveai.com", "display_name": "김대정", "role": "staff"},
+    {"email": "seyunjeong@medisolveai.com", "display_name": "정세윤", "role": "staff"},
+    {"email": "jekwon@medisolveai.com", "display_name": "권정의", "role": "staff"},
+]
+
 AI_PROVIDER_DEFAULT = {
     "provider": "claude",
     "model": None,
@@ -543,19 +571,69 @@ TASK_DEFINITION_SEEDS: list[dict] = [
 ]
 
 
-def seed_user(conn: Connection) -> None:
+# 0015 당시(role/is_active 컬럼 도입 이전) users 컬럼만 가진 경량 테이블.
+# User 모델을 직접 쓰면 Core insert가 모델의 Python-side default(role/is_active)를
+# INSERT에 끼워넣어 0015 단계에서 "column does not exist"로 깨진다 — 이를 회피한다.
+_users_0015 = sa.table(
+    "users",
+    sa.column("email", sa.Text),
+    sa.column("password_hash", sa.Text),
+    sa.column("display_name", sa.Text),
+)
+
+
+def seed_base_user(conn: Connection) -> None:
+    """role 컬럼 도입(0019) 이전의 단일 seed 계정 — 마이그레이션 0015 back-compat 전용.
+
+    role/is_active를 참조하지 않는다(그 단계엔 컬럼이 없다). 로스터·role upsert는 0019가
+    seed_users로 전담한다. 테스트/현행 seed는 seed_all(→seed_users)을 쓴다.
+    """
     exists = conn.execute(
-        sa.select(User.id).where(User.email == SEED_USER_EMAIL)
+        sa.select(_users_0015.c.email).where(_users_0015.c.email == SEED_USER_EMAIL)
     ).first()
     if exists:
         return
     conn.execute(
-        sa.insert(User).values(
+        sa.insert(_users_0015).values(
             email=SEED_USER_EMAIL,
             password_hash=hash_password(SEED_USER_PASSWORD),
-            display_name="kknaks",
+            display_name="이건학",
         )
     )
+
+
+def seed_users(conn: Connection) -> None:
+    """활성 로스터를 email 기준 멱등으로 upsert한다 (AXKG-SPEC-008 Seed Data).
+
+    role/is_active 컬럼이 있는 스키마 전제(마이그레이션 0019 이후 / 테스트 create_all).
+    - 신규: 기본 비밀번호 `1234`로 생성.
+    - 기존: role/is_active/display_name만 갱신(비밀번호는 보존 — 운영 중 변경 덮어쓰기 방지).
+      → 기존 seed 계정 kknaks가 admin으로 흡수된다.
+    """
+    for member in USER_ROSTER:
+        exists = conn.execute(
+            sa.select(User.id).where(User.email == member["email"])
+        ).first()
+        if exists:
+            conn.execute(
+                sa.update(User)
+                .where(User.email == member["email"])
+                .values(
+                    role=member["role"],
+                    is_active=True,
+                    display_name=member["display_name"],
+                )
+            )
+            continue
+        conn.execute(
+            sa.insert(User).values(
+                email=member["email"],
+                password_hash=hash_password(SEED_USER_PASSWORD),
+                display_name=member["display_name"],
+                role=member["role"],
+                is_active=True,
+            )
+        )
 
 
 def seed_settings(conn: Connection) -> None:
@@ -646,7 +724,7 @@ def seed_task_definitions(conn: Connection) -> None:
 
 
 def seed_all(conn: Connection) -> None:
-    seed_user(conn)
+    seed_users(conn)
     seed_settings(conn)
     seed_prompts(conn)
     seed_templates(conn)

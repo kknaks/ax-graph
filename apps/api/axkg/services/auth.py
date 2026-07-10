@@ -1,4 +1,5 @@
-"""auth 서비스 (AXKG-SPEC-008). 로그인/토큰 검증/로그아웃."""
+"""auth 서비스 (AXKG-SPEC-008). 로그인/토큰 검증/로그아웃/본인 비밀번호 변경."""
+import uuid
 from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,10 @@ class InvalidCredentialsError(Exception):
     """email/password 불일치 (Case Matrix: INVALID_CREDENTIALS)."""
 
 
+class InactiveAccountError(Exception):
+    """is_active=false 계정 로그인 시도 (Case Matrix: INACTIVE_ACCOUNT)."""
+
+
 class AuthService:
     def __init__(self, session: AsyncSession) -> None:
         self._users = UserRepository(session)
@@ -24,6 +29,8 @@ class AuthService:
         credentials = await self._users.get_credentials_by_email(email)
         if credentials is None or not verify_password(password, credentials.password_hash):
             raise InvalidCredentialsError
+        if not credentials.is_active:
+            raise InactiveAccountError
         token = generate_token()
         expires_at = utcnow() + timedelta(days=settings.axkg_auth_token_ttl_days)
         await self._tokens.create(credentials.id, hash_token(token), expires_at)
@@ -34,6 +41,7 @@ class AuthService:
                 id=credentials.id,
                 email=credentials.email,
                 display_name=credentials.display_name,
+                role=credentials.role,
             ),
         )
 
@@ -43,3 +51,14 @@ class AuthService:
 
     async def logout(self, token: str) -> None:
         await self._tokens.revoke_by_hash(hash_token(token), utcnow())
+
+    async def change_password(
+        self, user_id: uuid.UUID, current_password: str, new_password: str
+    ) -> None:
+        """본인 비밀번호 변경 — 현재 비번 검증 후 교체 (강제 아님, AXKG-SPEC-008 BE-4)."""
+        from axkg.core.security import hash_password
+
+        stored = await self._users.get_password_hash(user_id)
+        if stored is None or not verify_password(current_password, stored):
+            raise InvalidCredentialsError
+        await self._users.update_password(user_id, hash_password(new_password))

@@ -25,6 +25,7 @@ from axkg.dto.source import SourceDTO
 from axkg.repositories.gates import GateRepository
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai.context import ContextBuilder, ContextBuildError
+from axkg.services.ai.resolution import is_resume_session
 
 HANDLER_KIND = "classification_gate"
 FORM_SCHEMA_VERSION = "classification.v1"
@@ -109,8 +110,7 @@ class ClassificationGateContextBuilder(ContextBuilder):
 
         feedback = task.payload.get("feedback")
         if feedback:
-            resume = task.options.get("resume")
-            if resume:
+            if is_resume_session(task.options):
                 # 세션 resume: 원문·요약·이전 payload 재전송 없이 피드백만(토큰 절약).
                 return [self._feedback_block(str(feedback))]
             # stateless fallback: source 요약 + 이전 payload + feedback 모두 인라인.

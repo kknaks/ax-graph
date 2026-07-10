@@ -20,6 +20,22 @@ DEFAULT_OPTIONS: dict[str, Any] = {"timeout_sec": 300, "resume": False}
 DEFAULT_PROVIDER_OPTIONS: dict[str, Any] = {"max_turns": 3, "effort": "medium"}
 
 
+def is_resume_session(options: dict[str, Any] | None) -> bool:
+    """options.resume가 **실제 세션 resume**인가 (open-kknaks claude executor 계약).
+
+    executor는 resume가 `{"mode": "session", "session_id": ...}` dict일 때만 `--resume`한다
+    (`gates.py _enqueue_task`가 배선하는 유일한 형태). 글로벌 설정에서 스냅샷된 bare `True`나
+    `False`/`None`은 **새 세션**이므로 feedback-only 컨텍스트를 조립하면 안 된다 — 그 조합에서
+    원문/요약 없이 feedback 블록만 공급되는 조용한 컨텍스트 유실을 막는다(PLAN-010-T-008).
+    """
+    resume = (options or {}).get("resume")
+    return (
+        isinstance(resume, dict)
+        and resume.get("mode") == "session"
+        and bool(resume.get("session_id"))
+    )
+
+
 def _merge(*layers: dict[str, Any] | None) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for layer in layers:

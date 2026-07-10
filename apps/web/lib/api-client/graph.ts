@@ -38,7 +38,8 @@ export interface GraphDocuments {
   edges: GraphEdge[];
 }
 
-/** 문서 메타 (GET /documents/{id}). 본문 body 는 Markdown SoT 라 응답에 없음. */
+/** 문서 메타 (GET /documents/{id}). 단건 상세는 markdown_full(frontmatter+본문 전문)을
+ * markdown root에서 read-through로 함께 싣는다(목록에는 없음 — schemas/documents.py). */
 export interface DocumentMeta {
   id: string;
   path: string;
@@ -52,6 +53,8 @@ export interface DocumentMeta {
   indexed_at: string;
   created_at: string;
   updated_at: string;
+  /** 단건 상세 read-through 본문. 파일 미존재/접근 불가면 null. */
+  markdown_full?: string | null;
 }
 
 /** 단일 링크 뷰 (wikilink/up/backlink 공용). resolve 안 된 target 은 document_id=null·is_broken. */

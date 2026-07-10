@@ -348,6 +348,52 @@ async def test_builder_user_note_fallback_when_collection_fails(
 
 
 # ---------------------------------------------------------------------------
+# resume 잠복 버그 (PLAN-010-T-008): bare resume=true + 세션 유실 → full 컨텍스트
+# ---------------------------------------------------------------------------
+
+
+async def _summary_feedback_task(session, source_id, *, options, feedback="더 짧게"):
+    svc = SourceService(session)
+    task = await svc._enqueue_summary_task(source_id, None)
+    definition = await svc._definitions.get_by_key("collect_source_summary")
+    task = task.model_copy(update={"options": options, "payload": {"feedback": feedback}})
+    return task, definition
+
+
+async def test_summary_feedback_bare_resume_rebuilds_full_context(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # 글로벌 bare resume=true + 세션 없음: feedback-only가 아니라 원문/본문 full 재공급 + 피드백.
+    async with session_factory() as session:
+        source_id = await _new_source(session)
+        task, definition = await _summary_feedback_task(
+            session, source_id, options={"resume": True}
+        )
+        builder = SourceSummaryContextBuilder(session, collect=_collect_ok)
+        blocks = await builder.build_data_blocks(task, definition)
+        labels = [b.label for b in blocks]
+        assert "source" in labels and "content" in labels  # 원문 컨텍스트 재공급
+        assert "feedback" in labels  # + 피드백
+        assert builder.last_material is not None  # 실제로 재수집됨
+
+
+async def test_summary_feedback_real_session_stays_feedback_only(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # 실세션 dict일 때만 feedback-only 유지 — 원문 재수집하면 _collect_forbidden이 실패시킨다.
+    async with session_factory() as session:
+        source_id = await _new_source(session)
+        task, definition = await _summary_feedback_task(
+            session,
+            source_id,
+            options={"resume": {"mode": "session", "session_id": "sess-1"}},
+        )
+        builder = SourceSummaryContextBuilder(session, collect=_collect_forbidden)
+        blocks = await builder.build_data_blocks(task, definition)
+        assert [b.label for b in blocks] == ["feedback"]
+
+
+# ---------------------------------------------------------------------------
 # execute_source_summary 오케스트레이션
 # ---------------------------------------------------------------------------
 

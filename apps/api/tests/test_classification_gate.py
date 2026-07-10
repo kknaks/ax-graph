@@ -817,3 +817,57 @@ async def test_route_gate_not_found(
     res = await client.post(f"/gates/{uuid.uuid4()}/approve", headers=headers)
     assert res.status_code == 404
     assert res.json()["detail"]["error_code"] == "GATE_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# resume 잠복 버그 (PLAN-010-T-008): bare resume=true + 세션 유실 → full 컨텍스트
+# ---------------------------------------------------------------------------
+
+
+def _feedback_task(source_id: uuid.UUID, options: dict) -> AiTaskDTO:
+    return AiTaskDTO(
+        id=uuid.uuid4(),
+        task_type="regenerate_classification_gate",
+        status="queued",
+        provider="claude",
+        queued_at=utcnow(),
+        source_id=source_id,
+        options=options,
+        payload={
+            "feedback": "area로 재분류해줘",
+            "prior_payload": {"destination_type": "resource"},
+        },
+    )
+
+
+async def test_classification_feedback_bare_resume_rebuilds_full_context(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # bare resume=true + 세션 없음: 요약 + 이전 payload + 피드백 full 조립(feedback-only 아님).
+    source_id = await _create_and_execute(
+        session_factory, result_text=json.dumps(VALID_CLASSIFICATION), session_id="s1"
+    )
+    async with session_factory() as session:
+        builder = ClassificationGateContextBuilder(session)
+        blocks = await builder.build_data_blocks(
+            _feedback_task(source_id, {"resume": True}), None
+        )
+        labels = [b.label for b in blocks]
+        assert labels == ["summary_payload", "prior_classification", "feedback"]
+
+
+async def test_classification_feedback_real_session_stays_feedback_only(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    source_id = await _create_and_execute(
+        session_factory, result_text=json.dumps(VALID_CLASSIFICATION), session_id="s1"
+    )
+    async with session_factory() as session:
+        builder = ClassificationGateContextBuilder(session)
+        blocks = await builder.build_data_blocks(
+            _feedback_task(
+                source_id, {"resume": {"mode": "session", "session_id": "s1"}}
+            ),
+            None,
+        )
+        assert [b.label for b in blocks] == ["feedback"]

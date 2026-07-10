@@ -17,6 +17,7 @@ import {
   type DocumentMeta,
   type GraphDocuments,
 } from "@/lib/api-client/graph";
+import { DocumentFileModal } from "@/components/document-file-modal";
 
 // force-graph 는 window/canvas 의존 → SSR 비활성. accessor 타입은 라이브러리 제네릭과
 // 반공변 충돌이 있어 프롭 타입을 느슨하게 캐스팅한다(콜백 내부는 FGNode/FGLink 로 명시).
@@ -102,6 +103,7 @@ export function DocumentGraph({ onSelectNode, focusRequest }: DocumentGraphProps
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ meta: DocumentMeta | null; links: DocumentLinks | null } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [fileModalId, setFileModalId] = useState<string | null>(null); // "파일 보기" 모달 대상
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -259,6 +261,17 @@ export function DocumentGraph({ onSelectNode, focusRequest }: DocumentGraphProps
   const nodeCount = graph?.nodes.length ?? 0;
   const edgeCount = graph?.edges.length ?? 0;
 
+  // 헤더 노드 색 범례 — 전 타입 정적 나열(색 SSOT = TYPE_COLOR/typeColor 재사용).
+  // project 문서는 document_type=baseline으로 렌더되므로 한 항목으로 묶고,
+  // archive는 문서를 만들지 않아 노드가 없지만 완결성 위해 회색으로 표기한다.
+  const legendItems: { key: string; label: string }[] = [
+    { key: "reference", label: "reference" },
+    { key: "permanent", label: "permanent" },
+    { key: "concept", label: "concept" },
+    { key: "baseline", label: "project(baseline)" },
+    { key: "archive", label: "archive" },
+  ];
+
   // 상세 패널용 링크 분해: 상류=up, 하류=incoming lineage, backlink(assoc)=incoming assoc.
   const links = detail?.links;
   const downstream = links?.backlinks.filter((l) => l.edge_type === "lineage") ?? [];
@@ -298,7 +311,19 @@ export function DocumentGraph({ onSelectNode, focusRequest }: DocumentGraphProps
             </button>
           )}
         </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {/* 문서 종류 노드 색 (전 타입 정적 나열) */}
+          {legendItems.map((t) => (
+            <span key={t.key} className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: typeColor(t.key) }}
+              />
+              {t.label}
+            </span>
+          ))}
+          <span aria-hidden className="h-3 w-px bg-border" />
+          {/* 엣지 종류 */}
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-0 w-4 border-t-[1.5px] border-border" /> assoc{" "}
             <span className="font-mono">[[ ]]</span>
@@ -392,7 +417,18 @@ export function DocumentGraph({ onSelectNode, focusRequest }: DocumentGraphProps
                     {detail.meta.path}
                   </div>
                 </div>
-                <div className="mt-2 flex gap-1.5">
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setFileModalId(selectedId)}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-secondary/60"
+                  >
+                    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+                    </svg>
+                    파일 보기
+                  </button>
                   {detail.meta.source_url ? (
                     <a
                       href={detail.meta.source_url}
@@ -418,6 +454,22 @@ export function DocumentGraph({ onSelectNode, focusRequest }: DocumentGraphProps
           </div>
         )}
       </div>
+
+      {/* "파일 보기" 모달 — 원문 + 관련링크 내비. 관련링크 이동 시 그래프 선택 노드도 동기화. */}
+      <DocumentFileModal
+        documentId={fileModalId}
+        onClose={() => setFileModalId(null)}
+        onNavigate={(id) => {
+          setSelectedId(id);
+          const hint = graph?.nodes.find((n) => n.document_id === id);
+          onSelectNode?.({
+            id,
+            title: hint?.title ?? id,
+            document_type: hint?.document_type ?? "",
+          });
+          void loadDetail(id);
+        }}
+      />
     </section>
   );
 }

@@ -36,7 +36,12 @@ class AuthTokenRepository:
         user = await self._session.scalar(stmt)
         if user is None:
             return None
-        return UserDTO(id=user.id, email=user.email, display_name=user.display_name)
+        return UserDTO(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            role=user.role,
+        )
 
     async def revoke_by_hash(self, token_hash: str, now: datetime) -> bool:
         result = await self._session.execute(

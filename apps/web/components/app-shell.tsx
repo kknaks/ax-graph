@@ -5,12 +5,21 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { logout, type ApiUser } from "@/lib/api-client";
+import { logout, type ApiUser, type UserRole } from "@/lib/api-client";
+import { defaultLanding } from "@/lib/access";
 
-const NAV_ITEMS = [
+// 내비 항목별 최소 role (AXKG-SPEC-008 Access Boundary Matrix).
+// staff = 그래프만. admin = 소스/그래프/설정/유저 관리 전부.
+const NAV_ITEMS: {
+  href: string;
+  label: string;
+  minRole: UserRole;
+  icon: React.ReactNode;
+}[] = [
   {
     href: "/",
     label: "Source Inbox",
+    minRole: "admin",
     icon: (
       <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
     ),
@@ -18,6 +27,7 @@ const NAV_ITEMS = [
   {
     href: "/graph",
     label: "그래프",
+    minRole: "staff",
     icon: (
       <>
         <rect x="16" y="16" width="6" height="6" rx="1" />
@@ -30,6 +40,7 @@ const NAV_ITEMS = [
   {
     href: "/settings",
     label: "설정",
+    minRole: "admin",
     icon: (
       <>
         <circle cx="12" cy="12" r="3" />
@@ -37,7 +48,24 @@ const NAV_ITEMS = [
       </>
     ),
   },
+  {
+    href: "/users",
+    label: "유저 관리",
+    minRole: "admin",
+    icon: (
+      <>
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+      </>
+    ),
+  },
 ];
+
+/** staff는 minRole=staff 항목만, admin은 전부 본다 (SPEC-008 §4). */
+function visibleNav(role: UserRole) {
+  return NAV_ITEMS.filter((item) => role === "admin" || item.minRole === "staff");
+}
 
 export function AppShell({ user, children }: { user: ApiUser; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -57,7 +85,10 @@ export function AppShell({ user, children }: { user: ApiUser; children: React.Re
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 h-14 border-b border-border bg-background/95 backdrop-blur">
         <div className="flex h-full w-full items-center gap-6 px-6">
-          <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
+          <Link
+            href={defaultLanding(user.role)}
+            className="flex items-center gap-2 font-semibold tracking-tight"
+          >
             <svg
               className="h-5 w-5"
               viewBox="0 0 24 24"
@@ -79,7 +110,7 @@ export function AppShell({ user, children }: { user: ApiUser; children: React.Re
           </Link>
 
           <nav className="ml-2 flex items-center gap-1 text-sm" aria-label="주요 화면">
-            {NAV_ITEMS.map((item) => {
+            {visibleNav(user.role).map((item) => {
               const active =
                 item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
               return (
@@ -117,7 +148,30 @@ export function AppShell({ user, children }: { user: ApiUser; children: React.Re
                 {initial}
               </span>
               <span className="text-muted-foreground">{user.email}</span>
+              <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium capitalize text-muted-foreground">
+                {user.role}
+              </span>
             </div>
+            <Link
+              href="/account"
+              aria-current={pathname.startsWith("/account") ? "page" : undefined}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-secondary"
+            >
+              <svg
+                className="h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              비밀번호 변경
+            </Link>
             <button
               type="button"
               onClick={handleLogout}

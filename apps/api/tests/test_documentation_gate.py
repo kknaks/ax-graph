@@ -489,3 +489,69 @@ async def test_get_draft_markdown_not_found(
 async def test_documentation_gates_requires_auth(client: AsyncClient) -> None:
     res = await client.get("/documentation-gates")
     assert res.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# resume 잠복 버그 (PLAN-010-T-008): bare resume=true + 세션 유실 → full 컨텍스트
+# ---------------------------------------------------------------------------
+
+
+def _doc_feedback_task(source_id: uuid.UUID, options: dict) -> AiTaskDTO:
+    return AiTaskDTO(
+        id=uuid.uuid4(),
+        task_type="regenerate_documentation_gate",
+        status="queued",
+        provider="claude",
+        queued_at=utcnow(),
+        source_id=source_id,
+        options=options,
+        payload={
+            "feedback": "근거를 더 촘촘히 보강해줘",
+            "prior_payload": {"document_draft": {"filename_candidate": "x"}},
+            "destination_type": "resource",
+        },
+    )
+
+
+def _doc_definition() -> AiTaskDefinitionDTO:
+    return AiTaskDefinitionDTO(
+        id=uuid.uuid4(),
+        key="regenerate_documentation_gate",
+        display_name="doc",
+        handler_kind="documentation_gate",
+        prompt_key="documentation_gate",
+        template_key=None,
+    )
+
+
+async def test_documentation_feedback_bare_resume_rebuilds_full_context(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # bare resume=true + 세션 없음: 요약 payload 등 full 컨텍스트를 다시 공급한다.
+    async with session_factory() as session:
+        source_id = await _summarized_source(session)
+        builder = DocumentationGateContextBuilder(session)
+        blocks = await builder.build_data_blocks(
+            _doc_feedback_task(source_id, {"resume": True}), _doc_definition()
+        )
+        labels = [b.label for b in blocks]
+        assert "summary_payload" in labels  # 원문 요약 컨텍스트 재공급
+        assert "feedback" in labels
+
+
+async def test_documentation_feedback_real_session_stays_feedback_only(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        source_id = await _summarized_source(session)
+        builder = DocumentationGateContextBuilder(session)
+        blocks = await builder.build_data_blocks(
+            _doc_feedback_task(
+                source_id, {"resume": {"mode": "session", "session_id": "s1"}}
+            ),
+            _doc_definition(),
+        )
+        labels = [b.label for b in blocks]
+        # 세션 resume: 요약 재전송 없이 연결 후보 + 피드백만(summary_payload 없음).
+        assert "summary_payload" not in labels
+        assert "feedback" in labels

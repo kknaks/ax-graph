@@ -32,6 +32,7 @@ from axkg.repositories.documents import DocumentRepository
 from axkg.repositories.gates import GateRepository
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai.context import ContextBuilder, ContextBuildError
+from axkg.services.ai.resolution import is_resume_session
 from axkg.services.document_paths import (
     assemble_derived_create_path,
     assemble_main_path,
@@ -266,8 +267,7 @@ class DocumentationGateContextBuilder(ContextBuilder):
 
         feedback = task.payload.get("feedback")
         if feedback:
-            resume = task.options.get("resume")
-            if resume:
+            if is_resume_session(task.options):
                 # 세션 resume: 원문/요약/컨텍스트·concept 뼈대 재전송 없이 feedback만(토큰 절약).
                 # 단, 연결 후보 컨텍스트는 그래프가 갱신됐을 수 있어 항상 다시 공급한다(SPEC-011).
                 return [connection_block, self._feedback_block(str(feedback))]
