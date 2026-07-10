@@ -29,8 +29,12 @@ from axkg.integrations.open_kknaks import (
     OpenKknaksTaskRequest,
     OpenKknaksTaskResult,
 )
+from axkg.dto.ai import AiTaskDTO
 from axkg.models import User
+from axkg.models.base import utcnow
 from axkg.repositories.chat import ChatRepository
+from axkg.repositories.documents import DocumentRepository
+from axkg.services.ai.graph_rag_chat import GraphRagChatContextBuilder
 from axkg.services.chat import ChatService
 from axkg.services.graph import GraphService
 from axkg.services.graph_chat_execution import execute_graph_chat
@@ -143,6 +147,86 @@ async def _start_run(
         )
         await session.commit()
         return run.id, run.session_id
+
+
+# ---------------------------------------------------------------------------
+# 선택 문서 본문 주입 (T-018)
+# ---------------------------------------------------------------------------
+
+
+async def _selected_document_block(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    root: MarkdownRoot,
+    stem: str = "graph-rag",
+) -> str:
+    """선택 노드=stem으로 채팅을 시작하고 build_data_blocks의 selected_document 블록 텍스트를 반환."""
+    async with session_factory() as session:
+        user_id = await _seed_user(session)
+        doc = await DocumentRepository(session).get_by_stem(stem)
+        assert doc is not None
+        chat, message, run = await ChatService(session).start_chat(
+            user_id=user_id, question="이 문서 설명해줘", selected_node_id=doc.id
+        )
+        await session.commit()
+        payload = {
+            "session_id": str(chat.id),
+            "user_message_id": str(message.id),
+            "selected_document_id": str(doc.id),
+            "run_id": str(run.id),
+        }
+    async with session_factory() as session:
+        builder = GraphRagChatContextBuilder(session, root=root)
+        task = AiTaskDTO(
+            id=uuid.uuid4(),
+            task_type="graph_rag_chat",
+            status="queued",
+            provider="claude",
+            queued_at=utcnow(),
+            payload=payload,
+        )
+        blocks = await builder.build_data_blocks(task, None)
+    return next(b.text for b in blocks if b.label == "selected_document")
+
+
+async def test_selected_document_block_injects_body(
+    session_factory: async_sessionmaker[AsyncSession], graph_root: Path
+) -> None:
+    await _rebuild(session_factory)
+    text = await _selected_document_block(
+        session_factory, root=MarkdownRoot(settings.axkg_markdown_root)
+    )
+    assert "stem=graph-rag" in text
+    assert "[본문]" in text
+    assert "지식 그래프를 검색 컨텍스트로 삼는 RAG" in text  # 실제 md 본문 주입
+    assert "파일 시스템에 접근할 수 없다" in text  # 파일 직접 읽기 차단 안내
+
+
+async def test_selected_document_block_caps_long_body(
+    session_factory: async_sessionmaker[AsyncSession], graph_root: Path
+) -> None:
+    big_body = "가" * 9000
+    (graph_root / "big-note.md").write_text(
+        f"---\ntype: concept\nid: CONCEPT-BIG\ntitle: Big\n---\n{big_body}\n", "utf-8"
+    )
+    await _rebuild(session_factory)
+    text = await _selected_document_block(
+        session_factory, root=MarkdownRoot(settings.axkg_markdown_root), stem="big-note"
+    )
+    assert "… (truncated)" in text  # cap 절단 표기
+    assert text.count("가") <= 8000  # 9000자 전부 들어가지 않는다
+
+
+async def test_selected_document_block_fallback_when_file_missing(
+    session_factory: async_sessionmaker[AsyncSession], graph_root: Path, tmp_path: Path
+) -> None:
+    await _rebuild(session_factory)
+    # root가 문서 파일을 못 찾음(다른 빈 디렉토리) → stem-only 안전 fallback.
+    empty_root = MarkdownRoot(str(tmp_path / "does-not-exist"))
+    text = await _selected_document_block(session_factory, root=empty_root)
+    assert "stem=graph-rag" in text
+    assert "[본문]" not in text  # 본문 주입 없음
+    assert "파일 시스템에 접근할 수 없다" in text  # 안내는 유지
 
 
 # ---------------------------------------------------------------------------

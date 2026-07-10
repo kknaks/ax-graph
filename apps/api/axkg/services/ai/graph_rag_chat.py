@@ -34,6 +34,10 @@ HANDLER_KIND = "graph_rag_chat"
 # 근거 부족 표면화 코드 (SPEC-006 §5). run은 succeeded지만 result_payload로 표면화한다.
 INSUFFICIENT_GRAPH_CONTEXT = "INSUFFICIENT_GRAPH_CONTEXT"
 
+# 선택 문서 본문 주입 cap(문자). gates._STALE_MARKDOWN_CAP(supplement/stale 전문 주입) 선례와
+# 동일값. 초과 시 앞부분 + 절단 표기. 워커엔 문서 마운트가 없어 본문은 주입으로만 공급한다(T-018).
+SELECTED_DOC_MARKDOWN_CAP = 8000
+
 
 class GraphRagChatContextBuilder(ContextBuilder):
     """chat 스테이지 데이터 블록 공급 + 답변/evidence 소비.
@@ -46,6 +50,9 @@ class GraphRagChatContextBuilder(ContextBuilder):
         self._chats = ChatRepository(session)
         self._docs = DocumentRepository(session)
         self._graph = GraphService(session, root=root)
+        # 선택 문서 본문 read-through용(documents markdown_full 로딩과 동일 계열). 실행 경로는
+        # 실제 root를 주입한다(graph_chat_execution). None(테스트/오프라인)이면 본문 없이 fallback.
+        self._root = root
         # 실행 중 관찰용: build_data_blocks가 검색 스냅샷/질문/선택 노드를 남긴다.
         self.last_retrieval: RetrievalResult | None = None
         self.last_retrieval_context: dict[str, Any] = {}
@@ -76,8 +83,9 @@ class GraphRagChatContextBuilder(ContextBuilder):
         question = current.content.strip()
         self.last_question = question
 
-        # 선택 노드 → stem (retriever neighborhood 우선 컨텍스트).
-        selected_stem = await self._selected_stem(payload.get("selected_document_id"))
+        # 선택 노드 → 문서(stem + 본문). stem은 retriever neighborhood 우선 컨텍스트에 쓴다.
+        selected_doc = await self._selected_document(payload.get("selected_document_id"))
+        selected_stem = selected_doc.stem if selected_doc is not None else None
         self.last_selected_stem = selected_stem
 
         retrieval = await self._graph.retrieve(question, selected_stem=selected_stem)
@@ -87,18 +95,8 @@ class GraphRagChatContextBuilder(ContextBuilder):
         blocks: list[AssembledBlockDTO] = [
             AssembledBlockDTO(kind="data", label="question", text=f"[질문]\n{question}"),
         ]
-        if selected_stem is not None:
-            blocks.append(
-                AssembledBlockDTO(
-                    kind="data",
-                    label="selected_document",
-                    text=(
-                        f"[선택된 문서] stem={selected_stem}\n"
-                        "질문이 모호하면 이 문서 관점으로 해석하고, 이 문서의 neighborhood를 "
-                        "우선 컨텍스트로 삼는다."
-                    ),
-                )
-            )
+        if selected_doc is not None:
+            blocks.append(self._selected_document_block(selected_doc))
         blocks.append(
             AssembledBlockDTO(
                 kind="data",
@@ -198,12 +196,40 @@ class GraphRagChatContextBuilder(ContextBuilder):
     # 내부 헬퍼
     # ------------------------------------------------------------------
 
-    async def _selected_stem(self, raw_document_id: Any) -> str | None:
+    async def _selected_document(self, raw_document_id: Any):
+        """선택 노드 문서(stem + path 보유). 없으면 None (선택 없이 진행)."""
         document_id = self._uuid(raw_document_id)
         if document_id is None:
             return None
-        doc = await self._docs.get(document_id)
-        return doc.stem if doc is not None else None
+        return await self._docs.get(document_id)
+
+    def _selected_document_block(self, doc) -> AssembledBlockDTO:
+        """선택 문서 블록 — 본문(cap 적용)을 주입하고 파일 접근 금지를 명시한다(T-018).
+
+        본문 로드 실패/미존재면 stem-only 안전 fallback(현행 동작).
+        """
+        header = (
+            f"[선택된 문서] stem={doc.stem} · {doc.title}\n"
+            "질문이 모호하면 이 문서 관점으로 해석하고, 이 문서의 neighborhood를 우선 "
+            "컨텍스트로 삼는다.\n"
+            "파일 시스템에 접근할 수 없다 — 주어진 본문과 evidence 발췌만 근거로 답하고, "
+            "원문 파일을 직접 읽으려 하지 마라."
+        )
+        body = self._read_capped(getattr(doc, "path", None))
+        text = f"{header}\n\n[본문]\n{body}" if body else header
+        return AssembledBlockDTO(kind="data", label="selected_document", text=text)
+
+    def _read_capped(self, path: str | None) -> str:
+        """선택 문서 markdown read-through(cap). 미존재/로드 실패면 빈 문자열(→ fallback)."""
+        if not path or self._root is None or not self._root.exists(path):
+            return ""
+        try:
+            text = self._root.read_text(path)
+        except OSError:
+            return ""
+        if len(text) > SELECTED_DOC_MARKDOWN_CAP:
+            return text[:SELECTED_DOC_MARKDOWN_CAP] + "\n… (truncated)"
+        return text
 
     async def _resolve_evidence(
         self, evidence: list[dict[str, Any]]
