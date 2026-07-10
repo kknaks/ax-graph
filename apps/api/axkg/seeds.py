@@ -58,12 +58,31 @@ USER_ROSTER: list[dict] = [
     {"email": "jekwon@medisolveai.com", "display_name": "권정의", "role": "staff"},
 ]
 
+# AI task별 model 오버라이드(PLAN-010-T-011): 글로벌 model 비움(=claude CLI 디폴트 대형
+# 모델)에 의존하지 않도록, 실행되는 6개 task definition 전부에 Sonnet을 명시한다. claude 전용
+# (codex 등 타 provider 몫 없음). provider는 글로벌 claude 그대로, options/provider_options는
+# definition 레벨 override(문서화 max_turns 12/timeout 600, chat max_turns 6)를 건드리지 않는다.
+# key는 TASK_DEFINITION_SEEDS 기준 grounding(게이트는 generate/regenerate 각 2종).
+AI_TASK_MODEL = "claude-sonnet-4-6"
+AI_TASK_MODEL_OVERRIDES = {
+    "collect_source_summary": {"model": AI_TASK_MODEL},
+    "generate_classification_gate": {"model": AI_TASK_MODEL},
+    "regenerate_classification_gate": {"model": AI_TASK_MODEL},
+    "generate_documentation_gate": {"model": AI_TASK_MODEL},
+    "regenerate_documentation_gate": {"model": AI_TASK_MODEL},
+    "graph_rag_chat": {"model": AI_TASK_MODEL},
+}
+
+# 글로벌 기본값(PLAN-010-T-012): 신규 DB가 현재 운영값으로 태어나게 한다.
+# resume=True는 T-008 실세션 가드(is_resume_session) 덕에 무해 — bare true는 새 세션으로
+# 취급돼 컨텍스트가 재조립된다. max_turns=20은 definition override(문서화 12·chat 6)가 이겨
+# 그 stage들엔 영향 없고, override 없는 요약/분류만 20을 받는다.
 AI_PROVIDER_DEFAULT = {
     "provider": "claude",
     "model": None,
-    "options": {"timeout_sec": 300, "resume": False},
-    "provider_options": {"max_turns": 3, "effort": "medium"},
-    "task_overrides": {},
+    "options": {"timeout_sec": 300, "resume": True},
+    "provider_options": {"max_turns": 20, "effort": "medium"},
+    "task_overrides": AI_TASK_MODEL_OVERRIDES,
 }
 
 # ---------------------------------------------------------------------------

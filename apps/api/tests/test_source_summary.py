@@ -726,14 +726,18 @@ async def test_summary_feedback_empty_rejected(
 async def test_summary_feedback_no_previous_session_runs_without_resume(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # summarized인데 직전 succeeded task에 session이 없으면 resume 없이(새 세션) 재요약한다.
+    # summarized인데 직전 succeeded task에 session이 없으면 실세션 resume 없이(새 세션) 재요약한다.
+    # 전역 기본 resume=True(T-012)가 bare로 스냅샷될 수 있으나, 실세션 dict가 아니므로
+    # is_resume_session=False → builder가 full 컨텍스트로 재조립한다(T-008 가드).
+    from axkg.services.ai.resolution import is_resume_session
+
     source_id = await _summarize_once(session_factory, session_id="")
     async with session_factory() as session:
         result = await SourceService(session).submit_summary_feedback(
             source_id, feedback="다시 요약"
         )
         await session.commit()
-        assert "resume" not in result.ai_task.options or result.ai_task.options["resume"] is False
+        assert not is_resume_session(result.ai_task.options)
 
 
 async def test_summary_feedback_route_transitions_summarizing(

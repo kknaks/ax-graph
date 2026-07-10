@@ -125,6 +125,20 @@ export function GraphChatPanel({
         return { kind: "user", key: m.id, content: m.content };
       });
       setThread(items);
+      // 미응답 run 감지 → 폴링 재개: 다른 페이지에 갔다 와도(컴포넌트 재마운트)
+      // 진행 중이던 응답 생성을 이어받는다. assistant 메시지가 아직 없는
+      // 가장 최근 user 메시지의 run_id 가 폴링 대상.
+      const answeredRunIds = new Set(
+        detail.messages
+          .filter((m) => m.role === "assistant" && m.run_id)
+          .map((m) => m.run_id),
+      );
+      const pendingMsg = [...detail.messages]
+        .reverse()
+        .find((m) => m.role === "user" && m.run_id && !answeredRunIds.has(m.run_id));
+      if (pendingMsg?.run_id) {
+        setRun({ chatId: detail.chat_id, runId: pendingMsg.run_id });
+      }
     } catch (err) {
       appendItem({
         kind: "error",
@@ -289,7 +303,7 @@ export function GraphChatPanel({
   const busy = sending || run !== null;
 
   return (
-    <section className="flex h-full flex-col rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-sm">
       {/* 헤더: sparkles + 제목 + 새 채팅 */}
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
         <svg

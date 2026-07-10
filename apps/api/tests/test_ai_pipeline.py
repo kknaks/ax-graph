@@ -128,8 +128,8 @@ async def test_execute_success_snapshots_and_consumes_output(
         # SPEC-007 MVP 기본값이 생성 시점에 스냅샷된다
         assert task.provider == "claude"
         assert task.options["timeout_sec"] == 300
-        # 전역 기본 max_turns=3 (collect_source_summary는 definition override 없음)
-        assert task.provider_options == {"max_turns": 3, "effort": "medium"}
+        # 전역 기본 max_turns=20 (collect_source_summary는 definition override 없음, T-012)
+        assert task.provider_options == {"max_turns": 20, "effort": "medium"}
 
         done = await service.execute_task(task.id)
         await session.commit()
@@ -539,21 +539,21 @@ def test_resolution_defaults_without_settings() -> None:
     config = resolve_execution_config(None, definition)
     assert config.provider == "claude"
     assert config.model is None
-    assert config.options == {"timeout_sec": 300, "resume": False}
-    assert config.provider_options == {"max_turns": 3, "effort": "medium"}
+    assert config.options == {"timeout_sec": 300, "resume": True}
+    assert config.provider_options == {"max_turns": 20, "effort": "medium"}
 
 
-async def test_seed_global_max_turns_3_and_graph_rag_chat_override_6(
+async def test_seed_global_max_turns_20_and_graph_rag_chat_override_6(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """SPEC-007 정합: 전역 기본 max_turns=3, graph_rag_chat definition만 override 6.
+    """SPEC-007 정합: 전역 기본 max_turns=20(T-012), graph_rag_chat definition만 override 6.
 
     이 태스크의 핵심 검증 지점 — 시드된 전역 설정 + definition default_provider_options를
-    실제로 병합했을 때 chat만 6, 다른 stage(예: source_summary)는 전역 3을 받는다.
+    실제로 병합했을 때 chat만 6, 다른 stage(예: source_summary)는 전역 20을 받는다.
     """
     async with session_factory() as session:
         global_settings = await SettingRepository(session).get_value("ai_provider")
-        assert global_settings["provider_options"]["max_turns"] == 3
+        assert global_settings["provider_options"]["max_turns"] == 20
 
         defs = AiTaskDefinitionRepository(session)
         summary_def = await defs.get_by_key("collect_source_summary")
@@ -563,10 +563,72 @@ async def test_seed_global_max_turns_3_and_graph_rag_chat_override_6(
         summary_cfg = resolve_execution_config(global_settings, summary_def)
         chat_cfg = resolve_execution_config(global_settings, chat_def)
 
-        # source_summary는 definition override 없음 → 전역 3, effort medium 유지
-        assert summary_cfg.provider_options == {"max_turns": 3, "effort": "medium"}
+        # source_summary는 definition override 없음 → 전역 20, effort medium 유지
+        assert summary_cfg.provider_options == {"max_turns": 20, "effort": "medium"}
         # graph_rag_chat만 definition default_provider_options로 6, effort medium 유지
         assert chat_cfg.provider_options == {"max_turns": 6, "effort": "medium"}
+
+
+async def test_seed_task_overrides_pin_sonnet_model_for_all_tasks(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """PLAN-010-T-011: 시드된 task_overrides가 실행 6개 task 전부 model=claude-sonnet-4-6로.
+
+    글로벌 model 비움(=CLI 디폴트 대형 모델)에 의존하지 않게 각 task에 Sonnet을 명시한다.
+    provider는 claude 그대로, definition 레벨 provider_options(문서화 12/chat 6)는 무변경.
+    """
+    async with session_factory() as session:
+        global_settings = await SettingRepository(session).get_value("ai_provider")
+        assert global_settings["model"] is None  # 글로벌은 여전히 비움
+        defs = AiTaskDefinitionRepository(session)
+
+        expected_keys = [
+            "collect_source_summary",
+            "generate_classification_gate",
+            "regenerate_classification_gate",
+            "generate_documentation_gate",
+            "regenerate_documentation_gate",
+            "graph_rag_chat",
+        ]
+        for key in expected_keys:
+            definition = await defs.get_by_key(key)
+            assert definition is not None, key
+            cfg = resolve_execution_config(global_settings, definition)
+            assert cfg.model == "claude-sonnet-4-6", key
+            assert cfg.provider == "claude", key  # provider는 글로벌 claude 그대로
+
+        # definition 레벨 provider_options override는 model 오버라이드와 독립적으로 보존된다.
+        doc_def = await defs.get_by_key("generate_documentation_gate")
+        chat_def = await defs.get_by_key("graph_rag_chat")
+        assert resolve_execution_config(global_settings, doc_def).provider_options[
+            "max_turns"
+        ] == 12
+        assert resolve_execution_config(global_settings, chat_def).provider_options[
+            "max_turns"
+        ] == 6
+
+
+async def test_seed_global_defaults_reflect_operational_values(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """PLAN-010-T-012: 시드된 글로벌 기본값이 운영값(resume True / max_turns 20)으로 태어난다.
+
+    bare resume=True는 T-008 실세션 가드(is_resume_session) 덕에 무해 — override 없는 task의
+    resolved options에 resume=True가 실려도 실세션 dict가 아니므로 feedback-only가 되지 않는다.
+    """
+    from axkg.services.ai.resolution import is_resume_session
+
+    async with session_factory() as session:
+        global_settings = await SettingRepository(session).get_value("ai_provider")
+        assert global_settings["options"] == {"timeout_sec": 300, "resume": True}
+        assert global_settings["provider_options"] == {"max_turns": 20, "effort": "medium"}
+
+        summary_def = await AiTaskDefinitionRepository(session).get_by_key(
+            "collect_source_summary"
+        )
+        cfg = resolve_execution_config(global_settings, summary_def)
+        assert cfg.options["resume"] is True  # 전역 bare true 스냅샷
+        assert is_resume_session(cfg.options) is False  # 실세션 아님 → 무해(T-008)
 
 
 # ---------------------------------------------------------------------------

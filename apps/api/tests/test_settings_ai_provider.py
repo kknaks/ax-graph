@@ -75,7 +75,15 @@ async def test_get_seeded_ai_provider(client: AsyncClient) -> None:
     assert body["provider"] == "claude"
     assert body["options"]["timeout_sec"] == 300
     assert body["provider_options"]["effort"] == "medium"
-    assert body["task_overrides"] == {}
+    # PLAN-010-T-011: 실행 6개 task 전부 model=claude-sonnet-4-6 오버라이드 시드.
+    assert body["task_overrides"] == {
+        "collect_source_summary": {"model": "claude-sonnet-4-6"},
+        "generate_classification_gate": {"model": "claude-sonnet-4-6"},
+        "regenerate_classification_gate": {"model": "claude-sonnet-4-6"},
+        "generate_documentation_gate": {"model": "claude-sonnet-4-6"},
+        "regenerate_documentation_gate": {"model": "claude-sonnet-4-6"},
+        "graph_rag_chat": {"model": "claude-sonnet-4-6"},
+    }
 
 
 async def test_put_then_get_reflects(client: AsyncClient) -> None:
@@ -337,13 +345,13 @@ async def test_documentation_gate_resolved_config_reflects_seed(
             session, client=_DummyClient(), registry=ContextBuilderRegistry()
         )
         doc_task = await service.create_task("generate_documentation_gate")
-        # 전역 기본값(max_turns 3 / timeout_sec 300)은 그대로 — 문서화 정의만 override.
+        # 전역 기본값(max_turns 20 / timeout_sec 300, T-012)은 그대로 — 문서화 정의만 override.
         summary_task = await service.create_task("collect_source_summary")
         await session.commit()
 
     assert doc_task.provider_options["max_turns"] == 12
     assert doc_task.options["timeout_sec"] == 600
-    assert summary_task.provider_options["max_turns"] == 3
+    assert summary_task.provider_options["max_turns"] == 20
     assert summary_task.options["timeout_sec"] == 300
 
 

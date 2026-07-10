@@ -14,10 +14,11 @@ from typing import Any
 
 from axkg.dto.ai import AiTaskDefinitionDTO, ResolvedExecutionConfigDTO
 
-# SPEC-007 MVP 기본값 — settings.ai_provider seed와 동일한 값의 코드 소유 사본.
+# SPEC-007 MVP 기본값 — settings.ai_provider seed(AI_PROVIDER_DEFAULT)와 동일한 값의
+# 코드 소유 사본(ai_provider row 부재 시 fallback). PLAN-010-T-012로 운영값 정합.
 DEFAULT_PROVIDER = "claude"
-DEFAULT_OPTIONS: dict[str, Any] = {"timeout_sec": 300, "resume": False}
-DEFAULT_PROVIDER_OPTIONS: dict[str, Any] = {"max_turns": 3, "effort": "medium"}
+DEFAULT_OPTIONS: dict[str, Any] = {"timeout_sec": 300, "resume": True}
+DEFAULT_PROVIDER_OPTIONS: dict[str, Any] = {"max_turns": 20, "effort": "medium"}
 
 
 def is_resume_session(options: dict[str, Any] | None) -> bool:
