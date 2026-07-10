@@ -5,8 +5,8 @@ name: Deploy AXKG to prod (homeserver)
 #     build & push(GHCR) → 서버 SSH 접속 → .env 생성(GitHub Secret ENV_PROD 복사) →
 #     docker-compose.prod.yml 다운 → docker compose pull + up → alembic upgrade + seeds
 #
-# 트리거: workflow_dispatch(수동)만. push 트리거는 사용자 결정 전이라 넣지 않는다.
-#   FE(apps/web) 배포는 범위 제외 — 이미지 빌드/compose 에 web 없음.
+# 트리거: main push 자동 배포(백엔드 관련 경로만) + workflow_dispatch(수동/롤백).
+#   FE(apps/web) 배포는 범위 제외(Vercel 이 main push 를 따로 감지) — paths 필터로 제외.
 #
 # ── 필요한 GitHub Secrets ────────────────────────────────────────────────────
 #   ENV_PROD        : 서버 .env 파일 내용 통째(위 필수 키 전부; compose 주석 참고)
@@ -17,6 +17,14 @@ name: Deploy AXKG to prod (homeserver)
 # ────────────────────────────────────────────────────────────────────────────
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "apps/worker/**"
+      - "context/**"
+      - "docker-compose.prod.yml"
+      - ".github/workflows/deploy-prod.yml"
   workflow_dispatch:
     inputs:
       image_tag:
@@ -27,7 +35,7 @@ on:
 env:
   REGISTRY: ghcr.io
   OWNER: kknaks
-  # TODO(user): 서버 아키텍처 확인 후 조정. 홈서버가 arm64 면 linux/arm64 로 변경.
+  # 홈서버 실사 x86_64 확정 (2026-07-10)
   PLATFORM: linux/amd64
   DEPLOY_DIR: ~/ax-graph
 
