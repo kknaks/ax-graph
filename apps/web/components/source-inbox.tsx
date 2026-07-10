@@ -22,8 +22,16 @@ import {
   type Gate,
   type Source,
 } from "@/lib/api-client/sources";
+import {
+  dismissStale,
+  documentCaseMessage,
+  listStaleDocuments,
+  regenerateDocument,
+  type StaleDocument,
+} from "@/lib/api-client/documents";
 import { SourceList, type StatusFilter } from "@/components/source-list";
 import { GateHistoryStack } from "@/components/gate-history-stack";
+import { StaleList, StaleDetail } from "@/components/stale-documents";
 import {
   GateFeedbackModal,
   type FeedbackTarget,
@@ -47,6 +55,14 @@ export function SourceInbox() {
   const [documented, setDocumented] = useState<Source[]>([]);
   const [documentedLoading, setDocumentedLoading] = useState(false);
   const [documentedError, setDocumentedError] = useState<string | null>(null);
+
+  // stale(영향 가능성) 문서 — 재검토 탭 전용 (SPEC-004 E · T-033). concept 갱신 → 참조 permanent 배지.
+  const [staleDocs, setStaleDocs] = useState<StaleDocument[]>([]);
+  const [staleLoading, setStaleLoading] = useState(false);
+  const [staleError, setStaleError] = useState<string | null>(null);
+  const [staleBusyId, setStaleBusyId] = useState<string | null>(null);
+  // 재검토 탭 좌 목록에서 선택된 stale 문서 → 우 상세 뷰 대상.
+  const [selectedStaleId, setSelectedStaleId] = useState<string | null>(null);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Source | null>(null);
@@ -106,10 +122,34 @@ export function SourceInbox() {
     }
   }, []);
 
-  // 완료 탭 진입 시 로드.
+  // --- stale 문서 목록 로드 (GET /documents/stale · SPEC-004 E) ---
+  const loadStale = useCallback(async () => {
+    setStaleLoading(true);
+    setStaleError(null);
+    try {
+      const items = await listStaleDocuments();
+      setStaleDocs(items);
+    } catch (err) {
+      setStaleDocs([]);
+      setStaleError(documentCaseMessage(err, "영향 가능성 목록을 불러오지 못했습니다."));
+    } finally {
+      setStaleLoading(false);
+    }
+  }, []);
+
+  // 완료 탭 진입 시 완료 source 목록 로드.
   useEffect(() => {
     if (filter === "documented") void loadDocumented();
   }, [filter, loadDocumented]);
+
+  // stale 목록: 마운트 시 1회(재검토 탭 배지 카운트를 어느 탭에서든 노출) + 재검토 탭 진입 시 최신화.
+  useEffect(() => {
+    void loadStale();
+  }, [loadStale]);
+
+  useEffect(() => {
+    if (filter === "review") void loadStale();
+  }, [filter, loadStale]);
 
   // --- 게이트 로드 (선택 유지 시에만 반영) ---
   const loadGates = useCallback(async (sourceId: string, spinner = true) => {
@@ -354,41 +394,123 @@ export function SourceInbox() {
     [loadList, selectSource],
   );
 
+  // --- stale [판단 유효 · 배지 해제] (SPEC-004 E dismiss) ---
+  const handleDismissStale = useCallback(
+    async (doc: StaleDocument) => {
+      if (staleBusyId) return;
+      setStaleBusyId(doc.document_id);
+      setStaleError(null);
+      try {
+        await dismissStale(doc.document_id);
+        // 낙관적 제거 후 서버 재조회로 정합. 선택돼 있던 문서면 상세 선택 해제.
+        setStaleDocs((cur) => cur.filter((d) => d.document_id !== doc.document_id));
+        setSelectedStaleId((cur) => (cur === doc.document_id ? null : cur));
+        await loadStale();
+      } catch (err) {
+        setStaleError(documentCaseMessage(err, "배지 해제에 실패했습니다. 최신 상태를 확인해 주세요."));
+        await loadStale();
+      } finally {
+        setStaleBusyId(null);
+      }
+    },
+    [staleBusyId, loadStale],
+  );
+
+  // --- stale [재검토 · 재생성] (SPEC-004 E regenerate) ---
+  // producing source 의 문서화 게이트가 재문서화(v++)로 열린다 → 그 source 를 선택해 기존 게이트
+  // 스택(리뷰/피드백/승인 UI)을 그대로 재사용한다. source_id 미제공(BE shape 미확정) 시 이동 생략.
+  const handleRegenerateStale = useCallback(
+    async (doc: StaleDocument) => {
+      if (staleBusyId) return;
+      setStaleBusyId(doc.document_id);
+      setStaleError(null);
+      try {
+        const result = await regenerateDocument(doc.document_id);
+        const sourceId = result.source_id ?? null;
+        // 재문서화 시작 → stale 배지는 해제 흐름으로 간주해 목록에서 제거 + 재조회 + 상세 선택 해제.
+        setStaleDocs((cur) => cur.filter((d) => d.document_id !== doc.document_id));
+        setSelectedStaleId((cur) => (cur === doc.document_id ? null : cur));
+        if (sourceId) {
+          try {
+            const src = await getSource(sourceId);
+            await selectSource(src); // 우측 게이트 스택 로드 → regenerating 게이트를 폴링이 이어받음
+            // 승인 탭으로 전환해 기존 게이트 스택으로 이동을 눈에 보이게(T-031/T-033 흐름 유지).
+            setFilter("approval");
+          } catch {
+            // source 조회 실패는 조용히 무시 — stale 재조회로 상태만 정합.
+          }
+        }
+        await loadStale();
+      } catch (err) {
+        setStaleError(documentCaseMessage(err, "재생성 게이트를 열지 못했습니다. 최신 상태를 확인해 주세요."));
+        await loadStale();
+      } finally {
+        setStaleBusyId(null);
+      }
+    },
+    [staleBusyId, loadStale, selectSource],
+  );
+
   return (
-    <main className="w-full px-6 py-5">
-      <div className="mb-4">
+    <main className="flex h-[calc(100vh-3.5rem)] w-full flex-col px-6 py-5">
+      <div className="mb-4 shrink-0">
         <h1 className="text-xl font-semibold tracking-tight">문서함</h1>
       </div>
 
-      {/* 좌: 큐 목록 (300px) / 우: 요약→분류→문서화 세로 스택 (1fr) — 21-html 2컬럼 */}
-      <div className="grid grid-cols-[300px_1fr] gap-4">
-        <SourceList
-          sources={filter === "documented" ? documented : sources}
-          selectedId={selectedId}
-          filter={filter}
-          loading={filter === "documented" ? documentedLoading : loading}
-          error={filter === "documented" ? documentedError : listError}
-          onSelect={selectSource}
-          onFilterChange={setFilter}
-          onOpenModal={() => setModalOpen(true)}
-          onRetry={retryCollection}
-        />
-        <GateHistoryStack
-          source={selected}
-          gates={gates}
-          gatesLoading={gatesLoading}
-          gatesError={gatesError}
-          classifying={classifying}
-          gateBusyId={gateBusyId}
-          retrying={retrying}
-          retryError={retryError}
-          onSummaryFeedback={openSummaryFeedback}
-          onClassify={handleClassify}
-          onGateFeedback={openGateFeedback}
-          onApproveGate={handleApproveGate}
-          onRetryGate={handleRetryGate}
-          onRetryCollection={retryCollection}
-        />
+      {/* 좌: 큐 목록 (300px) / 우: 상세 (1fr) — 21-html 2컬럼. 문서함 높이는 탭 무관 항상 100%(뷰포트 채움).
+          재검토 탭: 좌 stale 목록 + 우 stale 상세. 그 외: 좌 source 목록 + 우 게이트 스택. */}
+      <div className="grid min-h-0 flex-1 grid-cols-[300px_1fr] gap-4">
+        {filter === "review" ? (
+          <>
+            <StaleList
+              items={staleDocs}
+              selectedId={selectedStaleId}
+              filter={filter}
+              loading={staleLoading}
+              error={staleError}
+              onSelect={(doc) => setSelectedStaleId(doc.document_id)}
+              onFilterChange={setFilter}
+              onOpenModal={() => setModalOpen(true)}
+            />
+            <StaleDetail
+              doc={staleDocs.find((d) => d.document_id === selectedStaleId) ?? null}
+              busyId={staleBusyId}
+              onDismiss={handleDismissStale}
+              onRegenerate={handleRegenerateStale}
+            />
+          </>
+        ) : (
+          <>
+            <SourceList
+              sources={filter === "documented" ? documented : sources}
+              selectedId={selectedId}
+              filter={filter}
+              reviewCount={staleDocs.length}
+              loading={filter === "documented" ? documentedLoading : loading}
+              error={filter === "documented" ? documentedError : listError}
+              onSelect={selectSource}
+              onFilterChange={setFilter}
+              onOpenModal={() => setModalOpen(true)}
+              onRetry={retryCollection}
+            />
+            <GateHistoryStack
+              source={selected}
+              gates={gates}
+              gatesLoading={gatesLoading}
+              gatesError={gatesError}
+              classifying={classifying}
+              gateBusyId={gateBusyId}
+              retrying={retrying}
+              retryError={retryError}
+              onSummaryFeedback={openSummaryFeedback}
+              onClassify={handleClassify}
+              onGateFeedback={openGateFeedback}
+              onApproveGate={handleApproveGate}
+              onRetryGate={handleRetryGate}
+              onRetryCollection={retryCollection}
+            />
+          </>
+        )}
       </div>
 
       <DirectInboxModal

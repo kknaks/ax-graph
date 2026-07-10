@@ -80,6 +80,7 @@ def merge_chunk_summaries(payloads: list[dict[str, Any]]) -> dict[str, Any]:
 
     - title: 첫 chunk의 title
     - summary: chunk 요약을 순서대로 이어붙임
+    - body_markdown: chunk별 장문 정리본을 원문 순서대로 "\n\n"로 이어붙임(빈 값 스킵)
     - keywords: 순서 보존 중복 제거 후 최대 10개(스키마 상한)
     - source_type: 최빈값(동률이면 첫 등장)
     빈 목록은 빈 요약 payload를 만들지 않고 호출측이 검증하도록 그대로 둔다.
@@ -106,6 +107,9 @@ def merge_chunk_summaries(payloads: list[dict[str, Any]]) -> dict[str, Any]:
         "title": payloads[0].get("title", ""),
         "summary": "\n\n".join(
             p.get("summary", "") for p in payloads if p.get("summary")
+        ),
+        "body_markdown": "\n\n".join(
+            p.get("body_markdown", "") for p in payloads if p.get("body_markdown")
         ),
         "keywords": keywords[:10],
         "source_type": source_type,
@@ -208,10 +212,20 @@ class SourceSummaryContextBuilder(ContextBuilder):
         return blocks
 
     async def handle_result(self, task: AiTaskDTO, output: dict[str, Any]) -> None:
-        """스키마 검증을 통과한 요약 payload를 저장하고 source를 summarized로 전이한다."""
+        """스키마 검증 통과 요약 payload를 새 버전으로 박제하고 source를 summarized로 전이한다.
+
+        게이트 revision과 same-format으로 요약 draft 버전을 남긴다(SPEC-002/003 C, T-012):
+        직전 active 버전은 superseded로 보존되고 이 실행이 새 active 버전이 된다. 이 실행 task의
+        `open_kknaks_session_id`(resume 원천)와 task_id를 버전에 함께 박제한다.
+        """
         if task.source_id is None:
             return
-        await self._sources.set_summary(task.source_id, output)
+        await self._sources.set_summary(
+            task.source_id,
+            output,
+            ai_task_id=task.id,
+            open_kknaks_session_id=task.open_kknaks_session_id,
+        )
 
     @staticmethod
     def _feedback_block(feedback: str) -> AssembledBlockDTO:

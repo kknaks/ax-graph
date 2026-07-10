@@ -20,6 +20,7 @@ class ApplyPlanDTO(BaseModel):
     db_actions: list[Any] = Field(default_factory=list)
     file_actions: list[Any] = Field(default_factory=list)
     validation_errors: list[Any] = Field(default_factory=list)
+    skipped: list[Any] = Field(default_factory=list)
     applied_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

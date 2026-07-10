@@ -65,9 +65,9 @@ DRAFT_MARKDOWN = (
 )
 
 VALID_DOCUMENTATION = {
+    # AI는 파일명(create)·target_stem(supplement)만 낸다 — 디렉토리는 시스템 조립(T-040).
     "document_draft": {
         "filename_candidate": "graph-rag-practical-design.md",
-        "target_path": "reference/graph-rag-practical-design.md",
         "markdown_full": DRAFT_MARKDOWN,
         "links": [
             {"target": "graph-rag", "edge_type": "assoc", "link_reason": "관련 개념 참조"}
@@ -76,14 +76,17 @@ VALID_DOCUMENTATION = {
     "derived_suggestions": [
         {
             "suggestion_type": "supplement_existing_concept",
-            "target_path": "permanent/concepts/agent-experience.md",
-            "file_action": "patch_markdown",
+            "target_stem": "agent-experience",
+            "file_action": "overwrite_markdown",
             "target_document_id": "doc-agent-experience",
+            "draft_markdown": "---\ntype: concept\ntitle: Agent Experience\n---\n\n초기 개념. reference로 보강됨.\n",
+            "diff_preview": "본문 말미에 보강 문단 추가.",
             "link_reason": "이 reference가 개념을 보강한다.",
         },
         {
             "suggestion_type": "create_new_concept",
-            "target_path": "permanent/concepts/evidence-first-rag.md",
+            "filename_candidate": "evidence-first-rag.md",
+            "draft_markdown": "---\ntype: concept\ntitle: Evidence-first RAG\n---\n\n근거 우선 RAG 개념.\n",
             "link_reason": "새 개념을 정의할 가치가 있다.",
         },
     ],
@@ -251,7 +254,8 @@ async def test_documentation_success_saves_envelope(
         draft = form["document_draft"]
         # resource → document_type reference (SPEC-005 어휘, DEC-005 'product' 아님)
         assert draft["document_type"] == "reference"
-        assert draft["target_path"] == "reference/graph-rag-practical-design.md"
+        # 경로는 시스템 조립: reference → resources/ + 정규화된 파일명 (T-040)
+        assert draft["target_path"] == "resources/graph-rag-practical-design.md"
         assert draft["markdown_full"].startswith("---")
         assert "type: reference" in draft["frontmatter_preview"]
         assert "## 요약" in draft["body_preview"]
@@ -260,7 +264,7 @@ async def test_documentation_success_saves_envelope(
         # 파생지식: change_kind 파생 + file_action
         derived = {d["suggestion_type"]: d for d in form["derived_suggestions"]}
         assert derived["supplement_existing_concept"]["change_kind"] == "modify"
-        assert derived["supplement_existing_concept"]["file_action"] == "patch_markdown"
+        assert derived["supplement_existing_concept"]["file_action"] == "overwrite_markdown"
         assert derived["supplement_existing_concept"]["target_document_id"] == "doc-agent-experience"
         assert derived["create_new_concept"]["change_kind"] == "create"
         assert derived["create_new_concept"]["file_action"] == "create_markdown"
@@ -285,6 +289,9 @@ async def test_documentation_injects_connection_context_and_template(
     assert "documents_index_snapshot" in prompt
     # destination=resource → reference 템플릿 body 조립(코드 프레임 + 템플릿)
     assert "## 핵심 내용" in prompt
+    # 파생 concept 뼈대가 main 템플릿과 별개로 문서화③ 조립에 고정 동봉됨 (PLAN-009-T-027)
+    assert "[파생 concept 뼈대]" in prompt
+    assert "## 근거 출처" in prompt
 
 
 def test_destination_template_mapping() -> None:
@@ -331,7 +338,7 @@ async def test_documentation_schema_mismatch_fails_gate(
         session_factory
     )
     # document_draft.markdown_full 누락 → OUTPUT_SCHEMA_MISMATCH
-    bad = {"document_draft": {"filename_candidate": "x", "target_path": "y"}, "derived_suggestions": []}
+    bad = {"document_draft": {"filename_candidate": "x"}, "derived_suggestions": []}
     client = FakeClient(result_text=json.dumps(bad))
     done = await execute_documentation_gate(
         task_id, gate_id, revision_id, client=client, session_factory=session_factory

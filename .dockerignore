@@ -1,0 +1,28 @@
+# worker 이미지 build context = repo root 이므로, 전송량·이미지 비대화를 막기 위해
+# 워커 빌드에 불필요한 것을 제외한다. (.gitignore 와 별개 — 여기만 관리)
+
+# VCS / 메타
+.git
+.gitignore
+**/.DS_Store
+
+# 다른 앱(워커 이미지와 무관)
+apps/web
+apps/api
+
+# 로컬 dev용 심링크 — docker 는 Dockerfile 의 `COPY context/ ...` 로 실파일을 채운다.
+# 심링크를 build context 에 넣으면 COPY 대상 경로와 충돌하므로 제외.
+apps/worker/workspace/context
+
+# 런타임/캐시/산출물
+data
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.venv
+**/node_modules
+**/.next
+**/*.tsbuildinfo
+
+# 로컬 도구 캐시
+.claude-tools

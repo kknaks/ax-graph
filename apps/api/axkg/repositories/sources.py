@@ -4,6 +4,8 @@
 - metadata.slack_events[] 누적·duplicate_candidate 표시는 database README 규약을 따른다.
 - JSONB 갱신은 새 dict를 재할당해 변경을 추적한다(ORM in-place mutation 미추적 회피).
 """
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 from typing import Any
@@ -11,8 +13,8 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from axkg.dto.source import SourceDTO
-from axkg.models import Source
+from axkg.dto.source import SourceDTO, SourceSummaryRevisionDTO
+from axkg.models import Source, SourceSummaryRevision
 from axkg.models.base import utcnow
 
 # 기본 Inbox 목록에서 숨기는 상태 (visible_in_inbox=False로 저장되는 상태).
@@ -31,6 +33,7 @@ def _to_dto(row: Source) -> SourceDTO:
         status=row.status,
         visible_in_inbox=row.visible_in_inbox,
         summary_payload=row.summary_payload or {},
+        active_summary_revision_id=row.active_summary_revision_id,
         destination_type=row.destination_type,
         approved_classification_gate_id=row.approved_classification_gate_id,
         documented_at=row.documented_at,
@@ -38,6 +41,20 @@ def _to_dto(row: Source) -> SourceDTO:
         metadata=row.metadata_ or {},
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _to_summary_revision_dto(row: SourceSummaryRevision) -> SourceSummaryRevisionDTO:
+    return SourceSummaryRevisionDTO(
+        id=row.id,
+        source_id=row.source_id,
+        version=row.version,
+        status=row.status,
+        payload=row.payload or {},
+        parent_revision_id=row.parent_revision_id,
+        ai_task_id=row.ai_task_id,
+        open_kknaks_session_id=row.open_kknaks_session_id,
+        created_at=row.created_at,
     )
 
 
@@ -233,32 +250,96 @@ class SourceRepository:
         return _to_dto(row)
 
     async def set_summary(
-        self, source_id: uuid.UUID, payload: dict[str, Any]
+        self,
+        source_id: uuid.UUID,
+        payload: dict[str, Any],
+        *,
+        ai_task_id: uuid.UUID | None = None,
+        open_kknaks_session_id: str | None = None,
     ) -> SourceDTO:
-        """요약 성공 시 직전 payload를 read-only 아카이브하고 새 payload로 갱신한다.
+        """요약 성공 시 새 버전을 immutable 박제로 남기고 active 포인터를 갱신한다.
 
-        AXKG-SPEC-011 ① 최초 요약(직전 payload 없음)은 그대로 저장한다. 피드백 재요약
-        (PLAN-005-T-016)은 직전 요약(v1/…/vN)을 `metadata.summary_versions[]`에 append해
-        불변 보존하고(SPEC-002 버전 규칙: 직전 버전 read-only) `summary_payload`를 최신(vN+1)로
-        덮어쓴다. FE가 소비하는 `summary_payload` 계약(title/summary/keywords/…)은 항상 최신
-        버전만 담아 그대로 유지한다 — 버전 이력은 metadata에만 둔다.
+        AXKG-SPEC-002/003 C · DEC-005 C (PLAN-009-T-012): 요약 draft 버전을 게이트 revision과
+        **same-format**으로 별도 테이블(`source_summary_revisions`)에 박제한다. 최초 요약은 v1,
+        피드백 재요약은 직전 active(reviewable) 버전을 `superseded`로 read-only 보존하고
+        새 버전(vN+1, `parent`=직전)을 append한다 — **직전 버전을 덮어쓰지 않는다**(비덮어쓰기).
 
-        NOTE: 버전 이력 저장 위치/형태는 curator T-015의 SPEC-002/011 개정본과 최종 정합
-        예정(PLAN-005-T-016). 현재는 metadata.summary_versions[]로 자기완결 보존한다.
+        `sources.summary_payload`는 active 버전 payload의 비정규 미러(FE 소비 계약 유지)이고,
+        `active_summary_revision_id`가 현재 버전을 가리킨다. 버전 이력의 SoT는 revision 테이블이다
+        (종전 `metadata.summary_versions[]` 배열 아카이브를 대체 — SPEC-003 §7 OQ (나) 별도 테이블).
         """
         row = await self._require_row(source_id)
-        prior = row.summary_payload or {}
-        if prior:
-            metadata = dict(row.metadata_ or {})
-            versions = list(metadata.get("summary_versions", []))
-            versions.append({"payload": prior, "archived_at": utcnow().isoformat()})
-            metadata["summary_versions"] = versions
-            row.metadata_ = metadata
+
+        prior_active = await self._get_active_summary_revision_row(source_id)
+        version = await self._next_summary_version(source_id)
+        new_rev = SourceSummaryRevision(
+            source_id=source_id,
+            version=version,
+            status="reviewable",
+            payload=dict(payload),
+            parent_revision_id=prior_active.id if prior_active else None,
+            ai_task_id=ai_task_id,
+            open_kknaks_session_id=open_kknaks_session_id,
+        )
+        self._session.add(new_rev)
+        await self._session.flush()
+        if prior_active is not None:
+            prior_active.status = "superseded"
+
         row.summary_payload = dict(payload)
+        row.active_summary_revision_id = new_rev.id
         row.status = "summarized"
         row.visible_in_inbox = True
         await self._session.flush()
         return _to_dto(row)
+
+    # ------------------------------------------------------------------
+    # 요약 draft 버전 박제 (source_summary_revisions) — 조회
+    # ------------------------------------------------------------------
+
+    async def _next_summary_version(self, source_id: uuid.UUID) -> int:
+        current = await self._session.scalar(
+            sa.select(sa.func.max(SourceSummaryRevision.version)).where(
+                SourceSummaryRevision.source_id == source_id
+            )
+        )
+        return (current or 0) + 1
+
+    async def _get_active_summary_revision_row(
+        self, source_id: uuid.UUID
+    ) -> SourceSummaryRevision | None:
+        return await self._session.scalar(
+            sa.select(SourceSummaryRevision).where(
+                SourceSummaryRevision.source_id == source_id,
+                SourceSummaryRevision.status == "reviewable",
+            )
+        )
+
+    async def get_active_summary_revision(
+        self, source_id: uuid.UUID
+    ) -> SourceSummaryRevisionDTO | None:
+        """현재 active(reviewable) 요약 버전. 요약 초안 카드/재요약이 읽는 버전이다."""
+        row = await self._get_active_summary_revision_row(source_id)
+        return _to_summary_revision_dto(row) if row is not None else None
+
+    async def get_summary_revision(
+        self, revision_id: uuid.UUID
+    ) -> SourceSummaryRevisionDTO | None:
+        row = await self._session.get(SourceSummaryRevision, revision_id)
+        return _to_summary_revision_dto(row) if row is not None else None
+
+    async def list_summary_revisions(
+        self, source_id: uuid.UUID
+    ) -> list[SourceSummaryRevisionDTO]:
+        """source의 요약 버전 목록(버전 오름차순, 박제 이력)."""
+        rows = (
+            await self._session.scalars(
+                sa.select(SourceSummaryRevision)
+                .where(SourceSummaryRevision.source_id == source_id)
+                .order_by(SourceSummaryRevision.version.asc())
+            )
+        ).all()
+        return [_to_summary_revision_dto(row) for row in rows]
 
     async def _require_row(self, source_id: uuid.UUID) -> Source:
         row = await self._get_row(source_id)

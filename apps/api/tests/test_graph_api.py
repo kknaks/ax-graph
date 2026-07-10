@@ -159,6 +159,49 @@ async def test_graph_search_ranks_and_returns_snapshot(
 
 
 # ---------------------------------------------------------------------------
+# 단건 상세 markdown_full read-through (PLAN-009-T-034)
+# ---------------------------------------------------------------------------
+
+
+async def test_document_detail_includes_markdown_full(
+    client: AsyncClient, seeded_root: Path
+) -> None:
+    headers = await _auth(client)
+    await _rebuild(client, headers)
+    retriever_id = await _doc_id(client, headers, "retriever-note")
+    res = await client.get(f"/documents/{retriever_id}", headers=headers)
+    assert res.status_code == 200
+    # frontmatter+본문 전문 그대로(파일 read-through).
+    assert res.json()["markdown_full"] == RETRIEVER
+
+
+async def test_document_detail_markdown_full_null_when_file_missing(
+    client: AsyncClient, seeded_root: Path
+) -> None:
+    headers = await _auth(client)
+    await _rebuild(client, headers)
+    retriever_id = await _doc_id(client, headers, "retriever-note")
+    # 인덱싱 이후 디스크 파일 삭제 → read-through 대상 없음 → null (인덱스 필드는 유지).
+    (seeded_root / "r" / "retriever-note.md").unlink()
+    res = await client.get(f"/documents/{retriever_id}", headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["markdown_full"] is None
+    assert body["stem"] == "retriever-note"
+
+
+async def test_document_list_omits_markdown_full(
+    client: AsyncClient, seeded_root: Path
+) -> None:
+    headers = await _auth(client)
+    await _rebuild(client, headers)
+    res = await client.get("/documents", headers=headers)
+    assert res.status_code == 200
+    # 목록은 본문을 싣지 않는다(payload 비대 방지) — 단건 상세만 read-through.
+    assert all(d["markdown_full"] is None for d in res.json()["documents"])
+
+
+# ---------------------------------------------------------------------------
 # link-preview Case Matrix
 # ---------------------------------------------------------------------------
 

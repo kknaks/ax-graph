@@ -141,12 +141,14 @@ class ClassificationGateContextBuilder(ContextBuilder):
             )
 
         envelope = wrap_classification_output(source, output)
-        # 새 버전이 reviewable이 되면 직전 버전(parent)은 superseded (SPEC-002 §5). gate의
-        # active 포인터는 이미 이 drafting revision을 가리키므로 parent_revision_id로 찾는다.
-        if revision.parent_revision_id is not None:
-            prior = await self._gates.get_revision(revision.parent_revision_id)
-            if prior is not None and prior.status == "reviewable":
-                await self._gates.update_revision(prior.id, status="superseded")
+        # 이 revision을 reviewable로 올리기 전에, 같은 gate의 다른 모든 reviewable 형제를
+        # superseded로 sweep한다(SPEC-002 §5, "최신 하나만 active/reviewable"). 빠른 연속
+        # 재생성으로 v2·v3가 병렬 완료돼도 parent 단건 supersede로는 중간 버전이 잔존해
+        # dangling이 생겼다(§7 OQ, 2026-07-10 라이브 실측). drafting인 이 revision 자신은
+        # 아직 reviewable이 아니라 sweep 대상이 아니지만, keep으로 명시해 안전을 보장한다.
+        await self._gates.supersede_other_reviewable_revisions(
+            task.gate_id, keep_revision_id=revision.id
+        )
 
         await self._gates.update_revision(
             revision.id,

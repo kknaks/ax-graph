@@ -151,6 +151,7 @@ class RetrievedDocument:
     score: float
     distance: int | None
     snippet: str
+    path: str = ""
 
 
 @dataclass(frozen=True)
@@ -516,6 +517,7 @@ class GraphService:
                     score=round(score, 3),
                     distance=distance,
                     snippet=_snippet(body, tokens, snippet_len) or doc.title,
+                    path=doc.path,
                 )
             )
         scored.sort(

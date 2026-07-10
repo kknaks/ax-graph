@@ -47,6 +47,7 @@ VALID_SUMMARY = {
     "summary": "문서 그래프를 검색 컨텍스트로 삼는 RAG 설계 자료 요약.",
     "keywords": ["graph-rag", "retriever"],
     "source_type": "article",
+    "body_markdown": "## 배경\n문서 그래프를 검색 컨텍스트로 삼는다.\n\n## 근거\n저자는 링크 밀도가 recall을 높인다고 주장한다.",
 }
 
 
@@ -199,15 +200,56 @@ def test_merge_chunk_summaries_single_passthrough() -> None:
 def test_merge_chunk_summaries_dedupes_and_majority() -> None:
     merged = merge_chunk_summaries(
         [
-            {"title": "T1", "summary": "s1", "keywords": ["a", "b"], "source_type": "article"},
-            {"title": "T2", "summary": "s2", "keywords": ["b", "c"], "source_type": "article"},
-            {"title": "T3", "summary": "s3", "keywords": ["c"], "source_type": "video"},
+            {"title": "T1", "summary": "s1", "keywords": ["a", "b"], "source_type": "article", "body_markdown": "b1"},
+            {"title": "T2", "summary": "s2", "keywords": ["b", "c"], "source_type": "article", "body_markdown": "b2"},
+            {"title": "T3", "summary": "s3", "keywords": ["c"], "source_type": "video", "body_markdown": "b3"},
         ]
     )
     assert merged["title"] == "T1"  # 첫 chunk title
     assert merged["summary"] == "s1\n\ns2\n\ns3"
     assert merged["keywords"] == ["a", "b", "c"]  # 순서 보존 중복 제거
     assert merged["source_type"] == "article"  # 최빈값
+
+
+def test_merge_chunk_summaries_concats_body_markdown_in_order() -> None:
+    # PLAN-009-T-001: chunk별 body_markdown을 원문 순서대로 이어붙인다.
+    merged = merge_chunk_summaries(
+        [
+            {"title": "T", "summary": "s1", "keywords": ["a"], "source_type": "article", "body_markdown": "## 1\n앞부분"},
+            {"title": "T", "summary": "s2", "keywords": ["b"], "source_type": "article", "body_markdown": "## 2\n뒷부분"},
+        ]
+    )
+    assert merged["body_markdown"] == "## 1\n앞부분\n\n## 2\n뒷부분"
+
+
+def test_merge_chunk_summaries_skips_empty_body_markdown() -> None:
+    # 빈 body_markdown chunk는 병합에서 스킵된다(빈 조각이 이음매를 오염시키지 않게).
+    merged = merge_chunk_summaries(
+        [
+            {"title": "T", "summary": "s1", "keywords": ["a"], "source_type": "article", "body_markdown": "본문 A"},
+            {"title": "T", "summary": "s2", "keywords": ["b"], "source_type": "article", "body_markdown": ""},
+            {"title": "T", "summary": "s3", "keywords": ["c"], "source_type": "article", "body_markdown": "본문 C"},
+        ]
+    )
+    assert merged["body_markdown"] == "본문 A\n\n본문 C"
+
+
+def test_source_summary_schema_requires_body_markdown() -> None:
+    """seed output_schema가 body_markdown을 required로 강제한다 — 누락 payload는 검증 실패."""
+    import jsonschema
+
+    from axkg.seeds import PROMPT_SEEDS
+
+    schema = next(s for s in PROMPT_SEEDS if s["key"] == "source_summary")["output_schema"]
+    assert "body_markdown" in schema["required"]
+
+    # 온전한 payload는 통과.
+    jsonschema.validate(VALID_SUMMARY, schema)
+
+    # body_markdown만 빠지면 스키마 검증 실패(pipeline OUTPUT_SCHEMA_MISMATCH 경로와 동일).
+    missing = {k: v for k, v in VALID_SUMMARY.items() if k != "body_markdown"}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(missing, schema)
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +544,7 @@ VALID_SUMMARY_V2 = {
     "summary": "피드백을 반영해 더 짧게 다듬은 요약.",
     "keywords": ["graph-rag"],
     "source_type": "article",
+    "body_markdown": "## 개정 정리\n피드백을 반영해 근거를 더 촘촘히 옮겼다.",
 }
 
 
@@ -564,10 +607,10 @@ async def test_summary_feedback_wires_resume_session_to_submit(
     assert "사용자 피드백" in submitted.prompt
 
 
-async def test_summary_feedback_updates_v2_and_archives_v1(
+async def test_summary_feedback_versions_v2_and_preserves_v1(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    source_id = await _summarize_once(session_factory)
+    source_id = await _summarize_once(session_factory, session_id="sess-v1")
 
     async with session_factory() as session:
         result = await SourceService(session).submit_summary_feedback(
@@ -579,20 +622,34 @@ async def test_summary_feedback_updates_v2_and_archives_v1(
     done = await execute_source_summary(
         feedback_task_id,
         source_id,
-        client=SessionFakeClient(result_text=json.dumps(VALID_SUMMARY_V2)),
+        client=SessionFakeClient(result_text=json.dumps(VALID_SUMMARY_V2), session_id="sess-v2"),
         session_factory=session_factory,
         collect=_collect_forbidden,
     )
     assert done.status == "succeeded"
 
     async with session_factory() as session:
-        source = await SourceRepository(session).get(source_id)
+        repo = SourceRepository(session)
+        source = await repo.get(source_id)
         assert source.status == "summarized"
-        # summary_payload는 v2로 갱신, 직전 v1은 metadata에 read-only 아카이브.
+        # summary_payload(FE 미러)는 active v2. 버전 이력은 별도 테이블에 immutable 박제.
         assert source.summary_payload == VALID_SUMMARY_V2
-        versions = source.metadata["summary_versions"]
-        assert len(versions) == 1
-        assert versions[0]["payload"] == VALID_SUMMARY
+
+        revisions = await repo.list_summary_revisions(source_id)
+        assert [r.version for r in revisions] == [1, 2]
+        v1, v2 = revisions
+        # v1은 덮어쓰이지 않고 superseded(read-only)로 보존, payload 그대로.
+        assert v1.status == "superseded"
+        assert v1.payload == VALID_SUMMARY
+        assert v1.parent_revision_id is None
+        # v2는 active(reviewable)이고 v1을 parent로 참조, active 포인터가 v2를 가리킨다.
+        assert v2.status == "reviewable"
+        assert v2.payload == VALID_SUMMARY_V2
+        assert v2.parent_revision_id == v1.id
+        assert source.active_summary_revision_id == v2.id
+        # 각 버전은 자기 실행 세션을 same-format으로 박제한다(v1=sess-v1, v2=sess-v2).
+        assert v1.open_kknaks_session_id == "sess-v1"
+        assert v2.open_kknaks_session_id == "sess-v2"
 
 
 async def test_summary_feedback_rejected_when_not_summarized(

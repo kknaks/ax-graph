@@ -20,8 +20,31 @@ class DocumentDTO(BaseModel):
     frontmatter: dict[str, Any] = Field(default_factory=dict)
     content_hash: str
     indexed_at: datetime
+    # 확정 문서 lifecycle (SPEC-004 / DEC-005 D). current/superseded, 버전, producing 링크.
+    status: str = "current"
+    version: int = 1
+    producing_revision_id: uuid.UUID | None = None
+    source_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class DocumentStaleMarkDTO(BaseModel):
+    """document_stale_marks row 스냅샷 (SPEC-004 §E).
+
+    stale 대상 permanent(document_id)에, 유발 concept(concept_stem/path)와 변경 요지
+    (change_summary)를 담는다. 영향 가능성 표시일 뿐 "수정 필요" 판단이 아니다(E-1).
+    """
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    concept_stem: str
+    concept_path: str | None = None
+    change_summary: str | None = None
+    triggering_revision_id: uuid.UUID | None = None
+    status: str = "active"
+    marked_at: datetime
+    dismissed_at: datetime | None = None
 
 
 class DocumentEdgeDTO(BaseModel):

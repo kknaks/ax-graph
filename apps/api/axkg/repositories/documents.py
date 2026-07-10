@@ -33,6 +33,10 @@ def _doc_to_dto(row: Document) -> DocumentDTO:
         frontmatter=row.frontmatter or {},
         content_hash=row.content_hash,
         indexed_at=row.indexed_at,
+        status=row.status,
+        version=row.version,
+        producing_revision_id=row.producing_revision_id,
+        source_id=row.source_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -86,14 +90,112 @@ class DocumentRepository:
         return [_doc_to_dto(row) for row in rows]
 
     async def list_by_types(
-        self, *, exclude_types: tuple[str, ...] = ()
+        self,
+        *,
+        exclude_types: tuple[str, ...] = (),
+        include_superseded: bool = False,
     ) -> list[DocumentDTO]:
+        """document_type 제외 필터 + 기본적으로 superseded 문서 제외 (SPEC-005).
+
+        superseded 문서는 박제 보존은 하되 최신 그래프/조회에서 빠진다(`source`·`deleted`와
+        동일 기준). 전체 인덱스가 필요한 rebuild/resolver는 `list_all`을 쓴다.
+        """
         stmt = sa.select(Document)
         if exclude_types:
             stmt = stmt.where(Document.document_type.notin_(exclude_types))
+        if not include_superseded:
+            stmt = stmt.where(Document.status != "superseded")
         stmt = stmt.order_by(Document.stem.asc())
         rows = (await self._session.scalars(stmt)).all()
         return [_doc_to_dto(row) for row in rows]
+
+    async def get_current_main_by_source(
+        self, source_id: uuid.UUID
+    ) -> DocumentDTO | None:
+        """같은 source 계보의 현재 유효 main 문서(재문서화 supersede 판단 기준, SPEC-004).
+
+        current 계보에는 최대 1건만 존재한다 — 재문서화가 옛 것을 superseded로 내리고 새 것을
+        current로 세우기 때문. 파생 concept도 producing source_id를 스탬프하므로(T-027 D),
+        main 계보 판단에서 concept를 제외한다 — main은 reference/permanent/baseline이다.
+        """
+        row = await self._session.scalar(
+            sa.select(Document).where(
+                Document.source_id == source_id,
+                Document.status == "current",
+                Document.document_type != "concept",
+            )
+        )
+        return _doc_to_dto(row) if row is not None else None
+
+    async def set_main_lifecycle(
+        self,
+        *,
+        path: str,
+        version: int,
+        producing_revision_id: uuid.UUID | None,
+        source_id: uuid.UUID,
+    ) -> DocumentDTO:
+        """main 문서(path 기준)에 lifecycle을 스탬프한다: current + version + producing 링크.
+
+        upsert(rebuild)가 만든 row 위에 얹는다 — upsert는 lifecycle을 건드리지 않으므로
+        일반 재인덱스(startup scan)에는 영향이 없다.
+        """
+        return await self._stamp_lifecycle(
+            path=path,
+            version=version,
+            producing_revision_id=producing_revision_id,
+            source_id=source_id,
+        )
+
+    async def set_derived_lifecycle(
+        self,
+        *,
+        path: str,
+        version: int,
+        producing_revision_id: uuid.UUID | None,
+        source_id: uuid.UUID,
+    ) -> DocumentDTO:
+        """파생 문서(concept/baseline)에 lifecycle을 스탬프한다(SPEC-004 D, T-027).
+
+        create=version 1 / supplement(overwrite)=version++. stem·경로 불변이고, 옛 버전 본문은
+        게이트 revision payload(draft_markdown)가 박제한다 — 별도 스냅샷 테이블을 만들지 않는다.
+        main과 동일 스탬프지만 재문서화 main 판단(`get_current_main_by_source`)은 concept 제외.
+        """
+        return await self._stamp_lifecycle(
+            path=path,
+            version=version,
+            producing_revision_id=producing_revision_id,
+            source_id=source_id,
+        )
+
+    async def _stamp_lifecycle(
+        self,
+        *,
+        path: str,
+        version: int,
+        producing_revision_id: uuid.UUID | None,
+        source_id: uuid.UUID,
+    ) -> DocumentDTO:
+        row = await self._session.scalar(
+            sa.select(Document).where(Document.path == path)
+        )
+        if row is None:
+            raise LookupError(f"document not found for lifecycle: {path}")
+        row.status = "current"
+        row.version = version
+        row.producing_revision_id = producing_revision_id
+        row.source_id = source_id
+        await self._session.flush()
+        return _doc_to_dto(row)
+
+    async def supersede_document(self, document_id: uuid.UUID) -> DocumentDTO | None:
+        """옛 문서를 superseded로 마킹(박제 보존). row/엣지는 감사·비교용으로 남긴다."""
+        row = await self._session.get(Document, document_id)
+        if row is None:
+            return None
+        row.status = "superseded"
+        await self._session.flush()
+        return _doc_to_dto(row)
 
     async def upsert(
         self,

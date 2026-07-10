@@ -20,6 +20,33 @@ export type Effort = "low" | "medium" | "high";
 export const PROVIDERS: Provider[] = ["claude", "codex"];
 export const EFFORTS: Effort[] = ["low", "medium", "high"];
 
+/** model 드롭다운 옵션. value=null = 비움(디폴트 사용). */
+export interface ModelOption {
+  value: string | null;
+  label: string;
+}
+
+/**
+ * provider가 지배하는 model 목록 (PLAN-009-T-003).
+ * BE는 model을 검증 없이 통과시켜 claude/codex CLI `--model`에 그대로 넘긴다 →
+ * 오타 = 런타임 실패. 드롭다운으로 가드한다. value는 CLI 풀 모델키.
+ * 신모델 추가 시 이 상수만 갱신한다.
+ */
+export const PROVIDER_MODELS: Record<Provider, ModelOption[]> = {
+  claude: [
+    { value: null, label: "디폴트 (비움)" },
+    { value: "claude-opus-4-8", label: "Opus 4.8" },
+    { value: "claude-opus-4-7", label: "Opus 4.7" },
+    { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+    { value: "claude-haiku-4-5", label: "Haiku 4.5" },
+    { value: "claude-fable-5", label: "Fable 5" },
+  ],
+  codex: [
+    { value: null, label: "디폴트 (비움)" },
+    { value: "gpt-5.5", label: "GPT-5.5" },
+  ],
+};
+
 /** 실행 한도 범위 (service _validate_limits — 클라 측 사전 검증에 사용). */
 export const TIMEOUT_MIN = 30;
 export const TIMEOUT_MAX = 3600;

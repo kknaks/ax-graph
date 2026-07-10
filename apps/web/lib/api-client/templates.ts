@@ -15,21 +15,24 @@
 
 import { ApiError, apiFetch, caseMessage } from "./index";
 
-/** MVP 템플릿 key (seed DocumentTemplate). project_baseline 은 SPEC-010 OQ 범위. */
-export type TemplateKey = "reference" | "permanent" | "project_baseline";
+/** MVP 템플릿 key (seed DocumentTemplate) — 문서 타입 기반 4종 (SPEC-010 PLAN-009-T-028).
+ * main 3종은 destination 매핑에서 파생, concept 는 파생 원자 개념(destination 없음, 문서화③ 고정 동봉). */
+export type TemplateKey = "reference" | "permanent" | "project_baseline" | "concept";
 
 /** key → 사람이 읽는 라벨(리스트 보조 표시). BE가 name을 주면 그걸 우선한다. */
 export const TEMPLATE_LABELS: Record<string, string> = {
   reference: "reference",
   permanent: "permanent",
   project_baseline: "project_baseline",
+  concept: "concept",
 };
 
-/** key → destination 흐름 부제(시안 카피). */
+/** key → 용도 부제(시안 카피). main 3종은 destination 매핑, concept 는 destination 없이 문서화③ 조립 시 고정 동봉(SPEC-010). */
 export const TEMPLATE_FLOW: Record<string, string> = {
   reference: "resource→reference",
   permanent: "area→permanent",
   project_baseline: "project→baseline",
+  concept: "파생 · 문서화③ 조립 동봉",
 };
 
 export interface TemplateSummary {

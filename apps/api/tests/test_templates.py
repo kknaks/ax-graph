@@ -16,7 +16,9 @@ from axkg.repositories.document_templates import DocumentTemplateRepository
 
 SEED_EMAIL = "kknaks@medisolveai.com"
 SEED_PASSWORD = "1234"
-SEED_KEYS = {"reference", "permanent", "project_baseline"}
+# concept은 파생지식 전용 뼈대 — destination 매핑이 아니라 문서화③ 조립에 고정 동봉되지만
+# document_templates 시드로 관리된다(PLAN-009-T-027, SPEC-011 §4 Layer Taxonomy).
+SEED_KEYS = {"reference", "permanent", "project_baseline", "concept"}
 KEY = "project_baseline"
 
 

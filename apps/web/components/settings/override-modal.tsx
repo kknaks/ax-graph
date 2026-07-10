@@ -9,8 +9,16 @@ import {
   TASK_DEFINITIONS,
   taskPromptKey,
   type Effort,
+  type Provider,
   type TaskOverride,
 } from "@/lib/api-client/settings";
+import { Select } from "@/components/ui/select";
+import { ModelSelect } from "./model-select";
+
+const BOOL_OPTIONS = [
+  { value: "false", label: "false" },
+  { value: "true", label: "true" },
+];
 
 export interface OverrideDraft {
   taskKey: string;
@@ -23,6 +31,7 @@ export interface OverrideDraft {
 export function OverrideModal({
   open,
   draft,
+  provider,
   existingKeys,
   busy,
   error,
@@ -31,6 +40,8 @@ export function OverrideModal({
 }: {
   open: boolean;
   draft: OverrideDraft | null;
+  /** 전역(저장된) provider — override는 provider를 못 바꾸므로 model 목록 필터에 사용. */
+  provider: Provider;
   /** 이미 override 가 있는 task_key(추가 모드에서 제외). */
   existingKeys: string[];
   busy: boolean;
@@ -39,7 +50,7 @@ export function OverrideModal({
   onSubmit: (taskKey: string, value: TaskOverride) => void;
 }) {
   const [taskKey, setTaskKey] = useState("");
-  const [model, setModel] = useState("");
+  const [model, setModel] = useState<string | null>(null);
   const [timeout, setTimeoutSec] = useState("");
   const [resume, setResume] = useState(false);
   const [maxTurns, setMaxTurns] = useState("");
@@ -58,7 +69,7 @@ export function OverrideModal({
     const initialKey = draft.edit ? draft.taskKey : draft.taskKey || available[0]?.key || "";
     setTaskKey(initialKey);
     const ov = draft.initial;
-    setModel(ov?.model ?? "");
+    setModel(ov?.model ?? null);
     setTimeoutSec(ov?.options?.timeout_sec != null ? String(ov.options.timeout_sec) : "");
     setResume(ov?.options?.resume ?? false);
     setMaxTurns(ov?.provider_options?.max_turns != null ? String(ov.provider_options.max_turns) : "");
@@ -90,7 +101,7 @@ export function OverrideModal({
     if (effort) providerOptions.effort = effort;
 
     const value: TaskOverride = { options, provider_options: providerOptions };
-    if (model.trim() !== "") value.model = model.trim();
+    if (model && model.trim() !== "") value.model = model.trim();
     onSubmit(taskKey, value);
   }
 
@@ -143,19 +154,16 @@ export function OverrideModal({
                     {taskKey}
                   </div>
                 ) : (
-                  <select
-                    id="ov-task"
-                    value={taskKey}
-                    onChange={(e) => setTaskKey(e.target.value)}
-                    disabled={busy}
-                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
-                  >
-                    {available.map((d) => (
-                      <option key={d.key} value={d.key}>
-                        {d.key}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="mt-1">
+                    <Select
+                      value={taskKey}
+                      onValueChange={setTaskKey}
+                      options={available.map((d) => ({ value: d.key, label: d.key }))}
+                      disabled={busy}
+                      ariaLabel="task definition"
+                      className="font-mono"
+                    />
+                  </div>
                 )}
               </div>
               <div>
@@ -168,14 +176,14 @@ export function OverrideModal({
                 <label htmlFor="ov-model" className="text-[11px] font-medium text-muted-foreground">
                   model override (비우면 디폴트 사용)
                 </label>
-                <input
-                  id="ov-model"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  disabled={busy}
-                  placeholder="비워둠 (디폴트 사용)"
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
-                />
+                <div className="mt-1">
+                  <ModelSelect
+                    provider={provider}
+                    value={model}
+                    onChange={setModel}
+                    disabled={busy}
+                  />
+                </div>
               </div>
               <div>
                 <label htmlFor="ov-timeout" className="text-[11px] font-medium text-muted-foreground">
@@ -191,19 +199,18 @@ export function OverrideModal({
                 />
               </div>
               <div>
-                <label htmlFor="ov-resume" className="text-[11px] font-medium text-muted-foreground">
+                <span className="text-[11px] font-medium text-muted-foreground">
                   options.resume
-                </label>
-                <select
-                  id="ov-resume"
-                  value={resume ? "true" : "false"}
-                  onChange={(e) => setResume(e.target.value === "true")}
-                  disabled={busy}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
-                >
-                  <option value="false">false</option>
-                  <option value="true">true</option>
-                </select>
+                </span>
+                <div className="mt-1">
+                  <Select
+                    value={resume ? "true" : "false"}
+                    onValueChange={(v) => setResume(v === "true")}
+                    options={BOOL_OPTIONS}
+                    disabled={busy}
+                    ariaLabel="options.resume"
+                  />
+                </div>
               </div>
               <div>
                 <label htmlFor="ov-maxturns" className="text-[11px] font-medium text-muted-foreground">

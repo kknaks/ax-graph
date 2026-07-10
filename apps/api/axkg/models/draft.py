@@ -59,6 +59,8 @@ class ApplyPlan(Base):
     db_actions: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     file_actions: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     validation_errors: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    # 실행 시 draft_markdown 없어 건너뛴 파생 제안(관측성, PLAN-009-T-016).
+    skipped: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     applied_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at_col()
     updated_at: Mapped[datetime] = updated_at_col()

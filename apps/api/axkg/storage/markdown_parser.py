@@ -92,10 +92,100 @@ def normalize_wikilink_target(inner: str) -> tuple[str, str | None]:
     return text.strip(), label
 
 
+def _fence_regions(body: str) -> list[tuple[int, int]]:
+    """코드펜스(``` / ~~~ 3개 이상, 개행 단위) 범위를 (start, end) char offset로.
+
+    여는 펜스와 같은 문자·같거나 긴 run의 줄에서 닫힌다. 안 닫히면 문서 끝까지 코드.
+    CommonMark 최소 수준 — info string/과설계는 다루지 않는다.
+    """
+    regions: list[tuple[int, int]] = []
+    fence_char: str | None = None
+    fence_len = 0
+    start_off = 0
+    pos = 0
+    for line in body.splitlines(keepends=True):
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        marker: tuple[str, int] | None = None
+        if indent <= 3 and stripped[:1] in ("`", "~"):
+            ch = stripped[0]
+            run = len(stripped) - len(stripped.lstrip(ch))
+            if run >= 3:
+                marker = (ch, run)
+        if fence_char is None:
+            if marker is not None:
+                fence_char, fence_len = marker
+                start_off = pos
+        elif marker is not None and marker[0] == fence_char and marker[1] >= fence_len:
+            regions.append((start_off, pos + len(line)))
+            fence_char = None
+        pos += len(line)
+    if fence_char is not None:
+        regions.append((start_off, len(body)))
+    return regions
+
+
+def _codespan_regions(body: str, fences: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """인라인 코드스팬(같은 길이 backtick run 쌍) 범위. 펜스 안 backtick은 무시한다."""
+
+    def in_fence(i: int) -> bool:
+        return any(s <= i < e for s, e in fences)
+
+    regions: list[tuple[int, int]] = []
+    n = len(body)
+    i = 0
+    while i < n:
+        if body[i] != "`" or in_fence(i):
+            i += 1
+            continue
+        j = i
+        while j < n and body[j] == "`":
+            j += 1
+        run = j - i
+        # 같은 길이의 닫는 backtick run을 찾는다(더 길면 안 닫힘 — CommonMark).
+        k = j
+        closed: int | None = None
+        while k < n:
+            if body[k] == "`" and not in_fence(k):
+                m = k
+                while m < n and body[m] == "`":
+                    m += 1
+                if m - k == run:
+                    closed = m
+                    break
+                k = m
+            else:
+                k += 1
+        if closed is not None:
+            regions.append((i, closed))
+            i = closed
+        else:
+            i = j
+    return regions
+
+
+def _code_regions(body: str) -> list[tuple[int, int]]:
+    """코드펜스 + 인라인 코드스팬 범위를 합쳐 반환한다(정렬됨)."""
+    fences = _fence_regions(body)
+    spans = _codespan_regions(body, fences)
+    return sorted(fences + spans)
+
+
 def extract_wikilinks(body: str) -> tuple[Wikilink, ...]:
-    """본문에서 `[[ ]]`를 순서대로 뽑아 정규화한다. 빈 target은 제외한다."""
+    """본문에서 `[[ ]]`를 순서대로 뽑아 정규화한다. 빈 target·코드 영역은 제외한다.
+
+    코드스팬/코드펜스 안의 `[[ID]]`는 링크 문법 **예시**이지 엣지가 아니므로 제외한다
+    (SPEC-005 §7 OQ, 2026-07-10 라이브 실측: BROKEN_WIKILINK 오탐 원인).
+    """
+    code = _code_regions(body)
+
+    def in_code(i: int) -> bool:
+        return any(s <= i < e for s, e in code)
+
     links: list[Wikilink] = []
     for match in _WIKILINK_RE.finditer(body):
+        if in_code(match.start()):
+            continue
         inner = match.group(1)
         target, label = normalize_wikilink_target(inner)
         if not target:

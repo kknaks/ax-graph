@@ -29,7 +29,7 @@ const TYPE_COLOR: Record<string, string> = {
   reference: "hsl(142 71% 45%)",
   resource: "hsl(142 71% 45%)",
   permanent: "hsl(262 83% 62%)",
-  concept: "hsl(262 83% 62%)",
+  concept: "hsl(189 94% 43%)",
   area: "hsl(217 91% 60%)",
   project: "hsl(217 91% 60%)",
   baseline: "hsl(38 92% 50%)",

@@ -31,10 +31,19 @@ APPROVAL_REVISION_STATUS = (
     "rejected",
     "failed",
 )
+# 요약 draft 버전(source_summary_revisions.status). 게이트 revision과 same-format 박제이되,
+# 요약 초안에는 승인/잠금 개념이 없어(SPEC-002/003) reviewable(active)·superseded 두 상태뿐이다.
+SUMMARY_REVISION_STATUS = ("reviewable", "superseded")
+# 확정 문서 lifecycle(documents.status, SPEC-004 Document Lifecycle / SPEC-005 / DEC-005 D).
+# current=최신 유효본, superseded=옛 버전 박제 보존(그래프 기본 노출 제외).
+DOCUMENT_STATUS = ("current", "superseded")
+# concept→permanent stale 배지(document_stale_marks.status, SPEC-004 DEC-005 E).
+# active=영향 가능성 표시 유지 / dismissed=해제(배지 제거 또는 재생성 승인 반영).
+STALE_MARK_STATUS = ("active", "dismissed")
 AI_TASK_STATUS = ("queued", "running", "succeeded", "failed", "cancelled")
 APPLY_PLAN_STATUS = ("pending", "valid", "invalid", "applying", "applied", "failed")
 APPLY_PLAN_VALIDATION_STATUS = ("pending", "valid", "invalid")
-FILE_ACTION_TYPE = ("create_markdown", "patch_markdown", "update_frontmatter")
+FILE_ACTION_TYPE = ("create_markdown", "overwrite_markdown")
 DOCUMENT_TYPE = (
     "reference",
     "permanent",

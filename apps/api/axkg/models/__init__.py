@@ -6,12 +6,12 @@
 from axkg.models.base import Base
 from axkg.models.user import User, AuthToken
 from axkg.models.setting import Setting
-from axkg.models.source import Source
+from axkg.models.source import Source, SourceSummaryRevision
 from axkg.models.prompt import Prompt, PromptVersion
 from axkg.models.ai_task import AiTaskDefinition, AiTask
 from axkg.models.gate import ApprovalGate, ApprovalGateRevision, GateFeedback
 from axkg.models.draft import Draft, ApplyPlan
-from axkg.models.document import Document, DocumentEdge
+from axkg.models.document import Document, DocumentEdge, DocumentStaleMark
 from axkg.models.chat import GraphChatSession, GraphChatMessage, GraphChatRun
 from axkg.models.template import DocumentTemplate, DocumentTemplateVersion
 
@@ -21,6 +21,7 @@ __all__ = [
     "AuthToken",
     "Setting",
     "Source",
+    "SourceSummaryRevision",
     "Prompt",
     "PromptVersion",
     "AiTaskDefinition",
@@ -32,6 +33,7 @@ __all__ = [
     "ApplyPlan",
     "Document",
     "DocumentEdge",
+    "DocumentStaleMark",
     "GraphChatSession",
     "GraphChatMessage",
     "GraphChatRun",

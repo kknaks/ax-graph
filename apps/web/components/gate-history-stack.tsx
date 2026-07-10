@@ -6,6 +6,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { MarkdownView } from "@/components/markdown-view";
 import {
   activeRevisionOf,
   isGateRunning,
@@ -14,6 +15,7 @@ import {
   type DerivedSuggestion,
   type DestinationType,
   type DocumentationForm,
+  type DraftLink,
   type Gate,
   type GateRevision,
   type Source,
@@ -31,6 +33,13 @@ const DEST_VAR: Record<DestinationType, string> = {
   area: "--tier-area",
   resource: "--tier-resource",
   archive: "--tier-archive",
+};
+// 각 destination 의 의미 한 줄 설명 (카드에 노출). 이모지 금지 — 색은 dot/체크가 담당.
+const PARA_DESC: Record<DestinationType, string> = {
+  project: "목표·마감 있는 지금 진행 중 산출물",
+  area: "마감 없이 지속 관리하는 책임/관심 영역",
+  resource: "나중에 참고할 외부 자료 (가장 흔함)",
+  archive: "지금 안 쓰고 보관 — 문서 안 만듦",
 };
 
 function CheckIcon({ className, color }: { className?: string; color?: string }) {
@@ -136,7 +145,8 @@ function ClassificationFormView({
       <div className="mb-3 flex items-center justify-end">
         <ConfidenceBadge value={confidence} />
       </div>
-      {/* PARA 4후보 — 선택된 destination 강조 (시안 grid-cols-4) */}
+      {/* PARA 4후보 — 테두리는 검정 유지(선택 시 굵게), PARA 색은 dot(비선택)/체크(선택)에만.
+          dot/체크 색 = 그 자료가 그래프에서 가질 노드 색. 각 카드에 destination 의미 한 줄. */}
       <div className="grid grid-cols-4 gap-2">
         {PARA.map(({ key, label }) => {
           const on = key === selected;
@@ -146,15 +156,11 @@ function ClassificationFormView({
               key={key}
               className={
                 on
-                  ? "rounded-md border-2 p-2 text-center"
+                  ? "rounded-md border-2 border-foreground p-2 text-center"
                   : "rounded-md border border-border p-2 text-center"
               }
-              style={on ? { borderColor: `hsl(var(${varName}))` } : undefined}
             >
-              <div
-                className={on ? "text-[11px] font-semibold" : "text-[11px] font-medium"}
-                style={on ? { color: `hsl(var(${varName}))` } : undefined}
-              >
+              <div className={on ? "text-[11px] font-semibold" : "text-[11px] font-medium"}>
                 {label}
               </div>
               {on ? (
@@ -165,6 +171,9 @@ function ClassificationFormView({
                   style={{ background: `hsl(var(${varName}))` }}
                 />
               )}
+              <div className="mt-1 text-[10px] leading-tight text-muted-foreground">
+                {PARA_DESC[key]}
+              </div>
             </div>
           );
         })}
@@ -196,6 +205,37 @@ const SUGGESTION_LABELS: Record<string, string> = {
   create_new_concept: "새 개념 생성",
   create_project_baseline: "프로젝트 baseline",
 };
+
+// ③ 초안이 채택한 연결 edge_type 라벨 (SPEC-005 document-link-graph-contract).
+// assoc = 본문 [[ ]] 연관, lineage = frontmatter up: 계보. 색은 DEST_VAR 톤 재사용.
+const EDGE_TYPE_LABELS: Record<string, string> = {
+  assoc: "assoc · [[ ]] 연관",
+  lineage: "lineage · up: 계보",
+};
+
+/** U-2 초안이 채택한 연결 1건 — [[target]] + edge_type 배지 + link_reason. */
+function DraftLinkItem({ link }: { link: DraftLink }) {
+  const edge = link.edge_type ?? "assoc";
+  const tier = edge === "lineage" ? "--tier-area" : "--tier-resource";
+  return (
+    <li className="rounded-md border border-border bg-background px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-mono text-[11px] text-foreground">
+          [[{link.target ?? "—"}]]
+        </span>
+        <span
+          className="shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-medium"
+          style={{ background: `hsl(var(${tier}) / .15)`, color: `hsl(var(${tier}))` }}
+        >
+          {EDGE_TYPE_LABELS[edge] ?? edge}
+        </span>
+      </div>
+      {link.link_reason && (
+        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{link.link_reason}</p>
+      )}
+    </li>
+  );
+}
 
 function Chevron() {
   return (
@@ -235,11 +275,10 @@ function ValidationBadge({ status }: { status?: string }) {
   );
 }
 
-/** 파생지식 1건 (SPEC-004 U-3) — create=생성 markdown preview, modify=대상 문서+diff. 개별 승인 버튼 없음. */
+/** 파생지식 1건 (SPEC-004 U-3) — create=생성 markdown preview, modify=변경 요지(diff)+수정 전문. 개별 승인 버튼 없음. */
 function DerivedSuggestionItem({ item }: { item: DerivedSuggestion }) {
   const label = SUGGESTION_LABELS[item.suggestion_type ?? ""] ?? item.suggestion_type ?? "파생지식";
   const isModify = item.change_kind === "modify";
-  const preview = isModify ? item.diff_preview : item.draft_markdown;
   return (
     <details className="draft rounded-md border border-border bg-background">
       <summary className="flex items-center justify-between gap-2 px-2.5 py-2">
@@ -250,7 +289,7 @@ function DerivedSuggestionItem({ item }: { item: DerivedSuggestion }) {
           </span>
         </span>
         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-          {item.file_action ?? (isModify ? "patch_markdown" : "create_markdown")} · {item.target_path ?? "—"}
+          {item.file_action ?? (isModify ? "overwrite_markdown" : "create_markdown")} · {item.target_path ?? "—"}
         </span>
       </summary>
       <div className="border-t border-border px-2.5 py-2">
@@ -259,15 +298,42 @@ function DerivedSuggestionItem({ item }: { item: DerivedSuggestion }) {
             <span className="font-medium text-foreground">연결 이유 ·</span> {item.link_reason}
           </p>
         )}
-        {preview ? (
+        {isModify ? (
+          item.diff_preview || item.draft_markdown ? (
+            <>
+              {/* 변경 요지(diff_preview)를 먼저, 그 아래 수정 전문(draft_markdown, 신 계약 T-016) 접기/펴기 */}
+              {item.diff_preview && (
+                <pre className="scroll-thin mb-2 max-h-[200px] overflow-y-auto whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-foreground/80">
+                  {String(item.diff_preview)}
+                </pre>
+              )}
+              {item.draft_markdown && (
+                <details className="draft rounded-md border border-border bg-background">
+                  <summary className="flex items-center justify-between gap-2 px-2.5 py-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium">
+                      <Chevron />
+                      수정 전문 펼치기 / 접기
+                    </span>
+                    <span className="font-mono text-[10px] text-muted-foreground">draft_markdown</span>
+                  </summary>
+                  <pre className="scroll-thin max-h-[320px] overflow-y-auto whitespace-pre-wrap border-t border-border px-2.5 py-2 font-mono text-[10px] leading-relaxed text-foreground/80">
+                    {item.draft_markdown}
+                  </pre>
+                </details>
+              )}
+            </>
+          ) : (
+            <p className="font-mono text-[10px] text-muted-foreground">
+              대상 문서 수정 preview 가 아직 없습니다.
+            </p>
+          )
+        ) : item.draft_markdown ? (
           <pre className="scroll-thin max-h-[200px] overflow-y-auto whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-foreground/80">
-            {String(preview)}
+            {item.draft_markdown}
           </pre>
         ) : (
           <p className="font-mono text-[10px] text-muted-foreground">
-            {isModify
-              ? "대상 문서 diff preview 가 아직 없습니다."
-              : "생성될 markdown preview 가 아직 없습니다."}
+            생성될 markdown preview 가 아직 없습니다.
           </p>
         )}
       </div>
@@ -437,6 +503,18 @@ function DocumentationGateView({
                     </pre>
                   </details>
                 )}
+                {(draft.links?.length ?? 0) > 0 && (
+                  <div className="rounded-md border border-border bg-background/60 p-2.5">
+                    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      채택 연결 · 본문 [[ ]] / up: 계보
+                    </div>
+                    <ul className="space-y-1.5">
+                      {draft.links!.map((link, i) => (
+                        <DraftLinkItem key={i} link={link} />
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <p className="font-mono text-[10px] text-muted-foreground">
                   연결 = 본문 [[ ]] + frontmatter up: (별도 연결 게이트 아님) · 승인 시 그래프 엣지로 반영
                 </p>
@@ -554,17 +632,29 @@ export function GateHistoryStack({
 }) {
   // collection_failed 메모(원문/요지) — source 전환 시 초기화.
   const [note, setNote] = useState("");
+  // [원문보기] 모달에 띄울 body_markdown(요약 카드 전용) — source 전환 시 닫음.
+  const [originalMarkdown, setOriginalMarkdown] = useState<string | null>(null);
   useEffect(() => {
     setNote("");
+    setOriginalMarkdown(null);
   }, [source?.id]);
+  // 모달 열림 중 ESC 로 닫기.
+  useEffect(() => {
+    if (originalMarkdown == null) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOriginalMarkdown(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [originalMarkdown]);
 
   if (!source) {
     return (
-      <section className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+      <section className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card text-card-foreground shadow-sm">
         <div className="border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">파이프라인</h2>
         </div>
-        <div className="grid min-h-[480px] place-items-center p-4 text-center text-xs leading-relaxed text-muted-foreground">
+        <div className="grid min-h-0 flex-1 place-items-center p-4 text-center text-xs leading-relaxed text-muted-foreground">
           왼쪽 목록에서 source를 선택하면
           <br />
           요약 → 분류 → 문서화 단계가 여기 세로로 쌓입니다.
@@ -585,7 +675,7 @@ export function GateHistoryStack({
   // --- collection_failed: 실패 카드 + 메모/재시도 (SPEC-003 U-2 T-014) ---
   if (source.status === "collection_failed") {
     return (
-      <div className="space-y-4">
+      <div className="scroll-thin h-full min-h-0 space-y-4 overflow-y-auto">
         <section className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">요약 실패</h2>
@@ -663,7 +753,7 @@ export function GateHistoryStack({
   // --- received / summarizing: 진행 카드 ---
   if (source.status === "received" || source.status === "summarizing") {
     return (
-      <section className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+      <section className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card text-card-foreground shadow-sm">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">요약 진행</h2>
           <span className="font-mono text-[10px] text-muted-foreground">
@@ -684,7 +774,7 @@ export function GateHistoryStack({
     const active = documentationGate ? activeRevisionOf(documentationGate) : null;
     const doneDraft = (active?.payload.form as DocumentationForm | undefined)?.document_draft;
     return (
-      <div className="space-y-4">
+      <div className="scroll-thin h-full min-h-0 space-y-4 overflow-y-auto">
         <section className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">문서화 완료</h2>
@@ -759,7 +849,7 @@ export function GateHistoryStack({
   // --- archived / 그 외 종료 상태 ---
   if (source.status !== "summarized") {
     return (
-      <section className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+      <section className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card text-card-foreground shadow-sm">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">완료</h2>
           <span className="font-mono text-[10px] text-muted-foreground">
@@ -780,7 +870,7 @@ export function GateHistoryStack({
   const form = activeRev?.payload.form;
 
   return (
-    <div className="space-y-4">
+    <div className="scroll-thin h-full min-h-0 space-y-4 overflow-y-auto">
       {/* ① 요약 초안 카드 (SPEC-003 U-2, section-summary-draft) */}
       <section className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
         <div className="p-4">
@@ -815,8 +905,30 @@ export function GateHistoryStack({
             제목·요약·태그 = 생성될 노트 frontmatter 시드 · 확정 md 는 문서화 후(WP3)
           </p>
         </div>
-        {/* CTA: [피드백](재요약) · [분류](분류 게이트 트리거). 분류 완료 후엔 잠금. */}
+        {/* CTA: [원문보기](body_markdown 모달) · [피드백](재요약) · [분류](분류 게이트 트리거). 분류 완료 후엔 피드백·분류 잠금, 원문보기는 항상 열람 가능. */}
         <div className="flex items-center justify-end gap-2 border-t border-border p-3">
+          {summary?.body_markdown && (
+            <button
+              type="button"
+              onClick={() => setOriginalMarkdown(summary.body_markdown ?? null)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-secondary"
+            >
+              <svg
+                className="h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+              </svg>
+              원문보기
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onSummaryFeedback(source)}
@@ -971,6 +1083,48 @@ export function GateHistoryStack({
           onApproveGate={onApproveGate}
           onRetryGate={onRetryGate}
         />
+      )}
+
+      {/* [원문보기] 모달 — 요약 body_markdown 을 MarkdownView 로 렌더 (읽기 전용, 넓고 스크롤 가능).
+          스타일은 gate-feedback-modal 톤과 맞춤(overlay + rounded 카드 + 헤더/닫기). */}
+      {originalMarkdown != null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="원문 보기"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setOriginalMarkdown(null);
+          }}
+        >
+          <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-border bg-background shadow-xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h3 className="text-sm font-semibold">원문 상세 · 요약 정리본</h3>
+              <button
+                type="button"
+                onClick={() => setOriginalMarkdown(null)}
+                aria-label="닫기"
+                className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-secondary"
+              >
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="scroll-thin overflow-y-auto px-5 py-4">
+              <MarkdownView markdown={originalMarkdown} />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

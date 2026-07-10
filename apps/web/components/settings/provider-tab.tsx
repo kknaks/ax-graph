@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   EFFORTS,
   PROVIDERS,
+  PROVIDER_MODELS,
   deleteTaskOverride,
   getAIProvider,
   getProviderHealth,
@@ -20,8 +21,22 @@ import {
   type ProviderHealth,
   type TaskOverride,
 } from "@/lib/api-client/settings";
+import { Select } from "@/components/ui/select";
 import { ConfirmDialog } from "./confirm-dialog";
+import { ModelSelect } from "./model-select";
 import { OverrideModal, type OverrideDraft } from "./override-modal";
+
+const BOOL_OPTIONS = [
+  { value: "false", label: "false" },
+  { value: "true", label: "true" },
+];
+
+/** provider의 유효 model 목록(null 제외)에 값이 있는지. 빈문자/null은 항상 유효(디폴트). */
+function modelValidForProvider(model: string, provider: Provider | string): boolean {
+  if (model.trim() === "") return true;
+  const options = PROVIDER_MODELS[provider as Provider] ?? [];
+  return options.some((o) => o.value === model);
+}
 
 interface DefaultDraft {
   provider: Provider | string;
@@ -237,7 +252,13 @@ export function ProviderTab() {
               <button
                 key={p}
                 type="button"
-                onClick={() => setDraft((d) => (d ? { ...d, provider: p } : d))}
+                onClick={() =>
+                  setDraft((d) =>
+                    d
+                      ? { ...d, provider: p, model: modelValidForProvider(d.model, p) ? d.model : "" }
+                      : d,
+                  )
+                }
                 className="rounded-lg border-2 p-3 text-left transition"
                 style={
                   active
@@ -280,13 +301,13 @@ export function ProviderTab() {
             <div className="grid flex-1 grid-cols-2 gap-3">
               <div className="col-span-2 rounded-md border border-border bg-background p-3">
                 <label htmlFor="def-model" className="text-[11px] font-medium text-muted-foreground">model</label>
-                <input
-                  id="def-model"
-                  value={draft.model}
-                  onChange={(e) => setDraft((d) => (d ? { ...d, model: e.target.value } : d))}
-                  placeholder="비워둠 (preset 없음)"
-                  className="mt-2 w-full rounded-md border border-input bg-background px-3 py-1.5 font-mono text-xs outline-none focus:ring-2 focus:ring-ring/40"
-                />
+                <div className="mt-2">
+                  <ModelSelect
+                    provider={draft.provider as Provider}
+                    value={draft.model || null}
+                    onChange={(v) => setDraft((d) => (d ? { ...d, model: v ?? "" } : d))}
+                  />
+                </div>
               </div>
               <div className="rounded-md border border-border bg-background p-3">
                 <label htmlFor="def-timeout" className="text-[11px] font-medium text-muted-foreground">options.timeout_sec</label>
@@ -299,16 +320,15 @@ export function ProviderTab() {
                 />
               </div>
               <div className="rounded-md border border-border bg-background p-3">
-                <label htmlFor="def-resume" className="text-[11px] font-medium text-muted-foreground">options.resume</label>
-                <select
-                  id="def-resume"
-                  value={draft.resume ? "true" : "false"}
-                  onChange={(e) => setDraft((d) => (d ? { ...d, resume: e.target.value === "true" } : d))}
-                  className="mt-2 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-ring/40"
-                >
-                  <option value="false">false</option>
-                  <option value="true">true</option>
-                </select>
+                <span className="text-[11px] font-medium text-muted-foreground">options.resume</span>
+                <div className="mt-2">
+                  <Select
+                    value={draft.resume ? "true" : "false"}
+                    onValueChange={(v) => setDraft((d) => (d ? { ...d, resume: v === "true" } : d))}
+                    options={BOOL_OPTIONS}
+                    ariaLabel="options.resume"
+                  />
+                </div>
               </div>
               <div className="rounded-md border border-border bg-background p-3">
                 <span className="text-[11px] font-medium text-muted-foreground">provider_options.max_turns</span>
@@ -482,6 +502,7 @@ export function ProviderTab() {
       <OverrideModal
         open={overrideDraft != null}
         draft={overrideDraft}
+        provider={(baseline?.provider ?? draft.provider) as Provider}
         existingKeys={overrideKeys}
         busy={overrideBusy}
         error={overrideError}

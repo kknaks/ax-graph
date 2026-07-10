@@ -365,13 +365,23 @@ class SourceService:
         if not text:
             raise EmptyFeedbackError(source_id)
 
-        # resume 대상 = 직전 요약(vN)을 낸 succeeded task의 session (SPEC-002 원 task 경로).
-        # AiExecutionService.resolve_resume_session(original_task_id=)의 순수 DB-read 등가물이다
-        # (intake 서비스는 실행 client를 소유하지 않으므로 여기서 직접 조회한다).
-        previous = await self._tasks.get_latest_succeeded_by_source(
-            source_id, SUMMARY_TASK_TYPE
-        )
-        resume_session = previous.open_kknaks_session_id if previous else None
+        # resume 대상 = 현재 active 요약 버전(vN)의 세션 (SPEC-002 open-kknaks Session Rule을
+        # 요약 버전에 적용: active revision session → 그 revision의 원 task session → 폴백).
+        # 게이트 _resolve_resume_session의 요약판이다 — active 버전을 SoT로 읽는다(T-012).
+        active = await self._sources.get_active_summary_revision(source_id)
+        previous: AiTaskDTO | None = None
+        resume_session: str | None = None
+        if active is not None:
+            resume_session = active.open_kknaks_session_id
+            if active.ai_task_id is not None:
+                previous = await self._tasks.get(active.ai_task_id)
+        if previous is None:
+            # active 버전이 없거나(백필 전 데이터) task 링크가 없으면 최신 succeeded task로 폴백.
+            previous = await self._tasks.get_latest_succeeded_by_source(
+                source_id, SUMMARY_TASK_TYPE
+            )
+        if resume_session is None and previous is not None:
+            resume_session = previous.open_kknaks_session_id
         task = await self._enqueue_feedback_task(source_id, text, previous, resume_session)
         updated = await self._sources.set_status(source_id, "summarizing")
         return QueueCollectionResult(updated, task)

@@ -12,6 +12,7 @@ __pycache__/
 # env
 .env
 .env.local
+.env.prod
 
 # runtime markdown root (experimental only)
 data/documents/*

@@ -38,19 +38,19 @@ from axkg.services.ai.fallbacks import (
     PROMPT_FALLBACK_USED,
     TEMPLATE_FALLBACK_USED,
 )
-from axkg.services.ai.pipeline import strip_code_fences
+from axkg.services.ai.pipeline import extract_json_object, strip_code_fences
 
 VALID_SUMMARY_OUTPUT = {
     "title": "Graph RAG 실전 설계",
     "summary": "문서 그래프를 검색 컨텍스트로 삼는 RAG 설계 자료 요약.",
     "keywords": ["graph-rag", "retriever"],
     "source_type": "article",
+    "body_markdown": "## 배경\n문서 그래프를 검색 컨텍스트로 삼는다.",
 }
 
 VALID_DOCUMENTATION_OUTPUT = {
     "document_draft": {
         "filename_candidate": "2026-07-07-graph-rag.md",
-        "target_path": "reference/2026-07-07-graph-rag.md",
         "markdown_full": "---\ntype: reference\n---\n# Graph RAG\n",
     },
     "derived_suggestions": [],
@@ -211,6 +211,138 @@ async def test_fenced_json_output_parses_and_consumes(
 
         assert done.status == "succeeded"
         assert dummy.results == [(done, VALID_SUMMARY_OUTPUT)]
+
+
+def test_extract_json_object_variants() -> None:
+    # 프리앰블(해설 문장) + 유효 JSON → 객체 경계만 추출 (PLAN-009-T-026 갭1 실측)
+    preamble = 'Now producing the classification output as pure JSON.\n\n{"a": 1}'
+    assert extract_json_object(preamble) == '{"a": 1}'
+    # 후미 텍스트도 제거
+    assert extract_json_object('{"a": 1}\n\n이상입니다.') == '{"a": 1}'
+    # 프리앰블 + 후미 동시
+    assert extract_json_object('설명\n{"a": 1}\n끝') == '{"a": 1}'
+    # 순수 JSON은 그대로
+    assert extract_json_object('{"a": 1}') == '{"a": 1}'
+    # 중괄호가 없으면 원문 그대로 (뒤에서 파싱 실패로 표면화)
+    assert extract_json_object("JSON이 아닙니다") == "JSON이 아닙니다"
+    # 내부 조작 없음 — 첫 { ~ 마지막 } 경계만, 내부 문자열은 손대지 않음
+    assert extract_json_object('x {"md": "a } b"} y') == '{"md": "a } b"}'
+
+
+async def test_preamble_json_output_parses_and_consumes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """JSON 앞 프리앰블 해설 문장이 붙어도 파싱·소비된다 (PLAN-009-T-026 갭1)."""
+    async with session_factory() as session:
+        preamble = (
+            "Now producing the classification output as pure JSON.\n\n"
+            + json.dumps(VALID_SUMMARY_OUTPUT)
+        )
+        client = FakeOpenKknaksClient(result_text=preamble)
+        dummy = DummyContextBuilder()
+        service = make_service(session, client, dummy)
+
+        task = await service.create_task("collect_source_summary")
+        done = await service.execute_task(task.id)
+        await session.commit()
+
+        assert done.status == "succeeded"
+        assert dummy.results == [(done, VALID_SUMMARY_OUTPUT)]
+
+
+async def test_fence_plus_preamble_combo_parses_and_consumes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """코드펜스 + 프리앰블 조합도 정규화된다 (strip_fences → extract → parse)."""
+    async with session_factory() as session:
+        combo = (
+            "해설을 붙입니다:\n```json\n"
+            + json.dumps(VALID_SUMMARY_OUTPUT)
+            + "\n```\n감사합니다."
+        )
+        client = FakeOpenKknaksClient(result_text=combo)
+        dummy = DummyContextBuilder()
+        service = make_service(session, client, dummy)
+
+        task = await service.create_task("collect_source_summary")
+        done = await service.execute_task(task.id)
+        await session.commit()
+
+        assert done.status == "succeeded"
+        assert dummy.results == [(done, VALID_SUMMARY_OUTPUT)]
+
+
+async def test_preamble_with_invalid_json_still_fails(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """경계 추출 후에도 무효 JSON이면 OUTPUT_PARSE_FAILED (강제복구 금지)."""
+    async with session_factory() as session:
+        # 중괄호는 있으나 내부가 깨진 JSON — 추출은 되지만 파싱은 실패해야 한다
+        client = FakeOpenKknaksClient(result_text="설명 {이건: 유효한, JSON이, 아니다,,} 끝")
+        dummy = DummyContextBuilder()
+        service = make_service(session, client, dummy)
+
+        task = await service.create_task("collect_source_summary")
+        failed = await service.execute_task(task.id)
+        await session.commit()
+
+        assert failed.status == "failed"
+        assert failed.error_code == "OUTPUT_PARSE_FAILED"
+        assert dummy.results == []
+
+
+async def test_literal_control_char_in_string_parses_and_consumes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """JSON 문자열 안 리터럴 개행/탭(미이스케이프)도 파싱·소비된다 (strict=False, T-029 실측)."""
+    async with session_factory() as session:
+        # body_markdown 값 안에 진짜 개행/탭 문자가 그대로 들어간 raw JSON — strict 파싱은
+        # "Invalid control character"로 실패하지만 strict=False는 허용한다(해석 유일·조작 없음).
+        raw = (
+            '{"title": "T", "summary": "S", "keywords": ["k"], '
+            '"source_type": "article", '
+            '"body_markdown": "## 배경\n리터럴 개행이\t문자열 안에 있다."}'
+        )
+        expected = {
+            "title": "T",
+            "summary": "S",
+            "keywords": ["k"],
+            "source_type": "article",
+            "body_markdown": "## 배경\n리터럴 개행이\t문자열 안에 있다.",
+        }
+        client = FakeOpenKknaksClient(result_text=raw)
+        dummy = DummyContextBuilder()
+        service = make_service(session, client, dummy)
+
+        task = await service.create_task("collect_source_summary")
+        done = await service.execute_task(task.id)
+        await session.commit()
+
+        assert done.status == "succeeded"
+        assert dummy.results == [(done, expected)]
+
+
+async def test_unescaped_quote_still_fails(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """미이스케이프 큰따옴표는 strict=False로도 결정적 해석 불가 → OUTPUT_PARSE_FAILED."""
+    async with session_factory() as session:
+        # title 값 안의 "hi"가 이스케이프되지 않아 delimiter 파싱이 깨진다(제어문자 문제 아님).
+        raw = (
+            '{"title": "he said "hi" today", "summary": "S", "keywords": ["k"], '
+            '"source_type": "article", "body_markdown": "b"}'
+        )
+        client = FakeOpenKknaksClient(result_text=raw)
+        dummy = DummyContextBuilder()
+        service = make_service(session, client, dummy)
+
+        task = await service.create_task("collect_source_summary")
+        failed = await service.execute_task(task.id)
+        await session.commit()
+
+        assert failed.status == "failed"
+        assert failed.error_code == "OUTPUT_PARSE_FAILED"
+        assert dummy.results == []
 
 
 # ---------------------------------------------------------------------------

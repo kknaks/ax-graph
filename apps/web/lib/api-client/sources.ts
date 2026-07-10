@@ -79,6 +79,9 @@ export interface SourceSummaryPayload {
   summary?: string | null;
   keywords?: string[] | null;
   material_type?: string | null;
+  // 요약 단계가 추가 산출하는 장문 원문 상세 정리본(PLAN-009 · BE PLAN-009-T-001).
+  // 카드 [원문보기] 모달에서 MarkdownView 로 렌더. 기존 payload 하위호환을 위해 optional.
+  body_markdown?: string | null;
 }
 
 // --- Source 리소스 (SPEC-003 Data Contract) ---
@@ -301,7 +304,8 @@ export type SuggestionType =
   | "create_new_concept"
   | "create_project_baseline";
 export type ChangeKind = "create" | "modify";
-export type FileAction = "create_markdown" | "patch_markdown" | "update_frontmatter";
+// AXKG-SPEC-004 SSOT: 액션은 create_markdown / overwrite_markdown 2종 (patch 없음, BE T-019 개명).
+export type FileAction = "create_markdown" | "overwrite_markdown";
 
 export interface DraftLink {
   target?: string;

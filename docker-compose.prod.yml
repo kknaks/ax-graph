@@ -1,0 +1,111 @@
+# AXKG — 운영 배포 compose (postgres + redis + api + worker)
+#
+# dev docker-compose.yml 와의 차이:
+#   - api/worker 는 build 가 아니라 GHCR 레지스트리 이미지 참조(deploy-prod.yml 이 빌드/push).
+#   - web(apps/web) 미포함 — 배포처 미정(사용자 결정 대기).
+#   - worker 의 claude 바이너리 배선은 placeholder(서버 경로 확정 후 사용자가 배선).
+#
+# 실행: docker compose --env-file .env -f docker-compose.prod.yml pull && up -d
+#       (.env 는 deploy-prod.yml 이 GitHub Secret ENV_PROD 로 생성)
+#
+# ── 필수 .env 키 (dev .env.example / config.py / run.py 에서 수집) ──────────────
+#   postgres     : POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+#   api 런타임   : AXKG_DATABASE_URL, AXKG_MARKDOWN_ROOT(=/workspace), AXKG_REDIS_URL,
+#                  AXKG_OPEN_KKNAKS_BASE_URL, AXKG_DEFAULT_PROVIDER, AXKG_CORS_ORIGINS,
+#                  AXKG_AUTH_TOKEN_TTL_DAYS
+#   Slack(선택) : AXKG_SLACK_SIGNING_SECRET, AXKG_SLACK_BOT_TOKEN
+#   worker       : REDIS_URL, NAMESPACE, QUEUES, CONCURRENCY, CLAUDE_CODE_OAUTH_TOKEN
+#                  (WORK_DIR 는 이미지에 고정 — 아래 environment 참고)
+#   이미지 태그  : IMAGE_TAG (미지정 시 latest — deploy-prod.yml 이 주입)
+# ────────────────────────────────────────────────────────────────────────────
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: axkg-postgres
+    ports:
+      - "45432:5432"                          # 4-prefix — 서버 충돌 시 사용자가 조정
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-axkg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-axkg}
+      POSTGRES_DB: ${POSTGRES_DB:-axkg}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-axkg} -d ${POSTGRES_DB:-axkg}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: axkg-redis
+    ports:
+      - "46380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/kknaks/ax-graph-api:${IMAGE_TAG:-latest}
+    container_name: axkg-api
+    ports:
+      - "48100:8000"
+    # migration 은 배포 워크플로우(deploy-prod.yml)의 `alembic upgrade head` 로 수행.
+    # 여기서는 서버 재기동/컨테이너 단독 재시작 시에도 스키마가 맞도록 재실행(멱등).
+    command: sh -c "alembic upgrade head && uvicorn axkg.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - path: .env
+        required: false                       # `docker compose config` 가 .env 없이도 파싱되도록
+    volumes:
+      # Markdown SoT root (= AXKG_MARKDOWN_ROOT=/workspace). 지식 문서 전체의 원천 —
+      # 유실되면 복구 불가. 서버 HDD(/mnt/data 1.8T)에 bind 영속(사용자 확정 2026-07-10).
+      - /mnt/data/axkg/documents:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # 이미지에 curl 미포함(python:3.12-slim) — python urllib 로 /health 확인
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s                       # alembic upgrade 시간 확보
+    restart: unless-stopped
+
+  worker:
+    image: ghcr.io/kknaks/ax-graph-worker:${IMAGE_TAG:-latest}
+    container_name: axkg-worker
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # claude 실행 프로젝트 = 이미지에 COPY 된 요약 workspace. env_file 값보다 우선하도록 고정.
+      WORK_DIR: /app/workspace
+      # 홈서버 호스트 네이티브 claude(x86_64, ~/.local 설치)를 PATH 로 물린다.
+      # mediness-worker 검증 패턴 미러 (2026-07-10 서버 실사).
+      PATH: /home/kknaks/.local/bin:/usr/local/bin:/usr/bin:/bin
+    volumes:
+      # 호스트 claude 마운트 — bin/ 만 마운트하면 안 됨: ~/.local/bin/claude 는
+      # ~/.local/share/claude/versions/ 로 가는 symlink 라 .local 통째 ro 마운트.
+      - /home/kknaks/.local:/home/kknaks/.local:ro
+      # claude 세션 영속(open-kknaks resume 이 컨테이너 재시작을 넘어 유지) — mediness 패턴.
+      - axkg-claude-sessions:/root/.claude/projects
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  axkg-claude-sessions:                       # claude 세션(resume) 영속
+  # Markdown SoT 는 /mnt/data/axkg/documents 호스트 bind (HDD) — named volume 아님

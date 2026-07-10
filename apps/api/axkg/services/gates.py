@@ -27,13 +27,16 @@ from axkg.dto.gate import (
 )
 from axkg.repositories.ai_task_definitions import AiTaskDefinitionRepository
 from axkg.repositories.ai_tasks import AiTaskRepository
+from axkg.repositories.documents import DocumentRepository
 from axkg.repositories.gates import GateRepository
 from axkg.repositories.settings import SettingRepository
 from axkg.repositories.sources import SourceRepository
+from axkg.repositories.stale import StaleMarkRepository
 from axkg.config import settings
 from axkg.services.ai.classification_gate import empty_classification_payload
 from axkg.services.ai.documentation_gate import empty_documentation_payload
 from axkg.services.ai.resolution import resolve_execution_config
+from axkg.services.summary_archive import write_summary_archive
 from axkg.storage.markdown_root import MarkdownRoot
 from axkg.workers.apply_executor import ApplyExecutor, ApplyValidationError
 
@@ -49,6 +52,9 @@ AI_PROVIDER_SETTINGS_KEY = "ai_provider"
 
 FEEDBACK_MIN_LENGTH = 10
 FEEDBACK_MAX_LENGTH = 4000
+
+# stale 재생성 주입 전문 cap(문자). 문서당 소형 컨텍스트 유지(SPEC-004 §E-3) — 초과 시 truncated.
+_STALE_MARKDOWN_CAP = 8000
 
 # 승인 destination이 문서화 게이트로 이어지지 않는 종료 목적지(AXKG-SPEC-001 U-3).
 ARCHIVE_DESTINATION = "archive"
@@ -169,6 +175,28 @@ class ReclassificationNotAllowedError(Exception):
         self.reason = reason
 
 
+class StaleDocumentNotFoundError(Exception):
+    """stale 재생성 대상 문서 없음 (Case Matrix: DOCUMENT_NOT_FOUND)."""
+
+    def __init__(self, document_id: uuid.UUID) -> None:
+        super().__init__(f"document not found: {document_id}")
+        self.document_id = document_id
+
+
+class StaleRegenerationNotAllowedError(Exception):
+    """stale 재생성 불가: 대상이 permanent가 아니거나 producing source/문서화 게이트가 없다.
+
+    (SPEC-004 §E: 재생성 게이트는 그 permanent의 producing source 기준 문서화 게이트
+    재문서화 경로를 재사용한다. 전용 Case Matrix 코드는 없어 STALE_REGENERATION_NOT_ALLOWED로
+    표면화 — 리포트 OQ 참조.)
+    """
+
+    def __init__(self, document_id: uuid.UUID, reason: str) -> None:
+        super().__init__(f"stale regeneration not allowed: doc {document_id} ({reason})")
+        self.document_id = document_id
+        self.reason = reason
+
+
 # ---------------------------------------------------------------------------
 # 결과 컨테이너
 # ---------------------------------------------------------------------------
@@ -265,6 +293,8 @@ class GateService:
         self._tasks = AiTaskRepository(session)
         self._definitions = AiTaskDefinitionRepository(session)
         self._settings = SettingRepository(session)
+        self._docs = DocumentRepository(session)
+        self._stale = StaleMarkRepository(session)
 
     # ------------------------------------------------------------------
     # 조회
@@ -367,6 +397,10 @@ class GateService:
             raise GateNotFoundError(source_id)
         if source.status != "summarized":
             raise SourceNotSummarizedError(source_id, source.status)
+
+        # 요약 확정 지점(정정 모델 첫째 md 생성, PLAN-009-T-014): [분류]로 넘기는 이 순간에
+        # active summary 버전을 요약 보관 md로 확정 생성한다(보관용 side-output, 그래프 무관).
+        await self._write_summary_archive(source)
 
         gate = await self._gates.get_gate_by_source_and_kind(
             source_id, GATE_KIND_CLASSIFICATION
@@ -595,6 +629,112 @@ class GateService:
         return GateTaskResult(gate, revision, task)
 
     # ------------------------------------------------------------------
+    # stale 재생성 게이트 오픈 (POST /documents/{id}/regenerate, SPEC-004 §E)
+    # ------------------------------------------------------------------
+
+    async def open_stale_regeneration(
+        self, document_id: uuid.UUID
+    ) -> GateTaskResult:
+        """stale permanent의 재생성 게이트를 열고 재생성 task를 큐잉한다(SPEC-004 §E-3/E-4).
+
+        그 permanent의 producing source 기준 문서화 게이트의 재문서화 경로(v++)를 재사용한다:
+        새 revision(v_next) + `regenerate_documentation_gate` task. task payload에 stale 주입
+        (대상 permanent 전문 + 바뀐 concept 전문 + 변경 요지, E-3 3입력)을 실어 context builder가
+        재생성 초안을 만들게 한다. 이후 리뷰/피드백/승인은 기존 게이트 계약 그대로다.
+
+        1 문서 = 1 재생성 게이트. 일괄 판단/일괄 실행 없음(E-3/E-4). 반영은 자동이 아니라
+        사용자 승인(approve→Apply Executor)이 하며, 승인 apply가 stale을 해제한다.
+        """
+        doc = await self._docs.get(document_id)
+        if doc is None:
+            raise StaleDocumentNotFoundError(document_id)
+        if doc.document_type != "permanent":
+            raise StaleRegenerationNotAllowedError(document_id, "not_permanent")
+        if doc.source_id is None:
+            raise StaleRegenerationNotAllowedError(document_id, "no_producing_source")
+
+        doc_gate = await self._gates.get_gate_by_source_and_kind(
+            doc.source_id, GATE_KIND_DOCUMENTATION
+        )
+        if doc_gate is None:
+            raise StaleRegenerationNotAllowedError(document_id, "no_documentation_gate")
+
+        source = await self._require_source(doc.source_id)
+        destination_type = source.destination_type or "area"
+        stale_injection = await self._build_stale_injection(doc)
+
+        parent_id = doc_gate.approved_revision_id or doc_gate.active_revision_id
+        version = await self._gates.next_version(doc_gate.id)
+        revision = await self._gates.create_revision(
+            gate_id=doc_gate.id,
+            version=version,
+            status="drafting",
+            payload=empty_documentation_payload(source, destination_type),
+            form_schema_version=DOCUMENTATION_FORM_VERSION,
+            parent_revision_id=parent_id,
+        )
+        task = await self._enqueue_task(
+            REGENERATE_DOC_TASK,
+            source_id=doc.source_id,
+            gate_id=doc_gate.id,
+            revision_id=revision.id,
+            payload_kind="documentation",
+            extra_payload={
+                "destination_type": destination_type,
+                "stale_regeneration": stale_injection,
+            },
+        )
+        revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
+        doc_gate = await self._gates.update_gate(
+            doc_gate.id,
+            status="regenerating",
+            active_revision_id=revision.id,
+            last_ai_task_id=task.id,
+        )
+        return GateTaskResult(doc_gate, revision, task)
+
+    async def _build_stale_injection(self, doc) -> dict:
+        """E-3 입력 계약: 대상 permanent 전문 + 바뀐 concept 전문 + 변경 요지(문서당 3입력)."""
+        root = MarkdownRoot(settings.axkg_markdown_root)
+        target_markdown = self._read_capped(root, doc.path)
+        changed_concepts: list[dict] = []
+        for mark in await self._stale.list_active_for_document(doc.id):
+            concept_path = mark.concept_path
+            if concept_path is None:
+                concept = await self._docs.get_by_stem(mark.concept_stem)
+                concept_path = concept.path if concept is not None else None
+            changed_concepts.append(
+                {
+                    "stem": mark.concept_stem,
+                    "path": concept_path,
+                    "change_summary": mark.change_summary,
+                    "markdown": (
+                        self._read_capped(root, concept_path) if concept_path else ""
+                    ),
+                }
+            )
+        return {
+            "target_document": {
+                "path": doc.path,
+                "title": doc.title,
+                "markdown": target_markdown,
+            },
+            "changed_concepts": changed_concepts,
+        }
+
+    @staticmethod
+    def _read_capped(root: MarkdownRoot, path: str) -> str:
+        if not path or not root.exists(path):
+            return ""
+        try:
+            text = root.read_text(path)
+        except OSError:
+            return ""
+        if len(text) > _STALE_MARKDOWN_CAP:
+            return text[:_STALE_MARKDOWN_CAP] + "\n… (truncated)"
+        return text
+
+    # ------------------------------------------------------------------
     # approve (POST /gates/{id}/approve)
     # ------------------------------------------------------------------
 
@@ -633,6 +773,11 @@ class GateService:
             raise StaleGateVersionError
 
         await self._gates.update_revision(active_id, status="approved", approved=True)
+        # 승인 안전망: 병렬 누적된 형제 reviewable이 남아 있으면 전부 superseded (dangling
+        # 방지, SPEC-002 §5/§7 OQ). handle_result sweep으로 이미 정리됐으면 no-op.
+        await self._gates.supersede_other_reviewable_revisions(
+            gate_id, keep_revision_id=active_id
+        )
         gate = await self._gates.update_gate(
             gate_id, status="approved", approved_revision_id=active_id
         )
@@ -788,6 +933,19 @@ class GateService:
         if source is None:
             raise GateNotFoundError(source_id)
         return source
+
+    async def _write_summary_archive(self, source) -> None:
+        """요약 확정 시 active summary 버전을 요약 보관 md로 확정 생성한다(PLAN-009-T-014).
+
+        active summary revision이 없으면(백필 전 데이터) 조용히 건너뛴다 — DB가 SoT다.
+        markdown root 미provision(테스트/미마운트)이면 writer가 스스로 skip한다.
+        """
+        active = await self._sources.get_active_summary_revision(source.id)
+        if active is None:
+            return
+        write_summary_archive(
+            MarkdownRoot(settings.axkg_markdown_root), source, active
+        )
 
     async def _approve_documentation(
         self, gate: ApprovalGateDTO, revision: ApprovalGateRevisionDTO

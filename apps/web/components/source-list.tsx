@@ -8,8 +8,9 @@ import {
 } from "@/lib/api-client/sources";
 import { formatTime } from "@/lib/format";
 
-/** 문서함 3탭: inbox(게이트 전) | 승인(게이트 진입 후 대기) | 완료(documented). */
-export type StatusFilter = "inbox" | "approval" | "documented";
+/** 문서함 4탭: inbox(게이트 전) | 승인(게이트 진입 후 대기) | 재검토(stale 전용) | 완료(documented).
+ * 재검토는 source 상태가 아니라 concept 갱신으로 영향 가능성이 붙은 permanent 문서 뷰다(SPEC-004 E). */
+export type StatusFilter = "inbox" | "approval" | "review" | "documented";
 
 // 파생 라벨 tone → 시안 tier 색 (배지 inline style).
 const TONE_STYLE: Record<InboxDisplay["tone"], React.CSSProperties> = {
@@ -35,11 +36,62 @@ function StageBadge({ source }: { source: Source }) {
 const FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "inbox", label: "inbox" },
   { value: "approval", label: "승인" },
+  { value: "review", label: "재검토" },
   { value: "documented", label: "완료" },
 ];
 
-/** 탭 분류: documented=완료, inbox_label 있으면 승인 게이트 대기, 없으면 아직 인박스. */
+/** 문서함 탭 바 — SourceList(inbox/승인/완료 좌열)와 StaleList(재검토 좌열)가 공유한다.
+ * 재검토 탭에는 stale 문서 수 카운트 배지를 붙인다(0건이어도 탭 유지). */
+export function DocboxTabs({
+  filter,
+  reviewCount,
+  onFilterChange,
+}: {
+  filter: StatusFilter;
+  /** 재검토 탭 배지 카운트(stale 문서 수). 0 이면 배지 생략. */
+  reviewCount: number;
+  onFilterChange: (filter: StatusFilter) => void;
+}) {
+  return (
+    <div className="grid grid-cols-4 gap-1 border-b border-border p-2">
+      {FILTERS.map((f) => {
+        const active = filter === f.value;
+        const showBadge = f.value === "review" && reviewCount > 0;
+        return (
+          <button
+            key={f.value}
+            type="button"
+            onClick={() => onFilterChange(f.value)}
+            aria-pressed={active}
+            className={
+              active
+                ? "inline-flex items-center justify-center gap-1 rounded-md border border-ring bg-secondary px-2 py-1.5 text-[11px] font-medium text-secondary-foreground"
+                : "inline-flex items-center justify-center gap-1 rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-secondary/60"
+            }
+          >
+            {f.label}
+            {showBadge && (
+              <span
+                className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                style={{
+                  background: "hsl(var(--tier-caution) / .15)",
+                  color: "hsl(var(--tier-caution))",
+                }}
+              >
+                {reviewCount}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 탭 분류: documented=완료, inbox_label 있으면 승인 게이트 대기, 없으면 아직 인박스.
+ * review 는 source 탭이 아니라 stale 문서 뷰 — SourceList 는 이 필터로 렌더되지 않는다(방어적 false). */
 function inTab(source: Source, filter: StatusFilter): boolean {
+  if (filter === "review") return false;
   if (filter === "documented") return source.status === "documented";
   if (source.status === "documented") return false;
   const inGate = !!source.inbox_label;
@@ -58,6 +110,7 @@ export function SourceList({
   sources,
   selectedId,
   filter,
+  reviewCount,
   loading,
   error,
   onSelect,
@@ -68,6 +121,8 @@ export function SourceList({
   sources: Source[];
   selectedId: string | null;
   filter: StatusFilter;
+  /** 재검토 탭 배지 카운트(stale 문서 수) — 어느 탭에서든 보이게 부모가 전달. */
+  reviewCount: number;
   loading: boolean;
   error: string | null;
   onSelect: (source: Source) => void;
@@ -78,7 +133,7 @@ export function SourceList({
   // 서버는 visible 목록 전체를 주고, inbox/승인 구분은 inbox_label 로 클라이언트에서 나눈다.
   const visible = sources.filter((s) => inTab(s, filter));
   return (
-    <section className="h-fit rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+    <section className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card text-card-foreground shadow-sm">
       {/* 헤더 — 제목 + Direct Inbox 모달 열기 (U-3) */}
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
@@ -118,29 +173,10 @@ export function SourceList({
         </button>
       </div>
 
-      {/* 상태별 필터 (U-1 상태별 필터, GET /sources?status=) */}
-      <div className="scroll-thin flex items-center gap-1 overflow-x-auto border-b border-border px-3 py-2">
-        {FILTERS.map((f) => {
-          const active = filter === f.value;
-          return (
-            <button
-              key={f.value}
-              type="button"
-              onClick={() => onFilterChange(f.value)}
-              aria-pressed={active}
-              className={
-                active
-                  ? "shrink-0 rounded-full bg-secondary px-2.5 py-1 text-[11px] font-medium text-secondary-foreground"
-                  : "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:bg-secondary/60"
-              }
-            >
-              {f.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* 상태별 필터 (U-1 상태별 필터) — 재검토 탭 포함 공유 탭 바 */}
+      <DocboxTabs filter={filter} reviewCount={reviewCount} onFilterChange={onFilterChange} />
 
-      <div className="scroll-thin max-h-[640px] space-y-2 overflow-y-auto p-3">
+      <div className="scroll-thin min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {loading && (
           <p className="px-1 py-6 text-center text-xs text-muted-foreground">
             불러오는 중…

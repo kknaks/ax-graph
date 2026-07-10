@@ -53,6 +53,37 @@ def test_empty_wikilink_ignored() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 코드스팬/코드펜스 안 [[ ]] 제외 (SPEC-005 §7 OQ, 2026-07-10 라이브 실측)
+# ---------------------------------------------------------------------------
+
+
+def test_wikilink_inside_codespan_excluded() -> None:
+    # 인라인 코드스팬 안은 링크 문법 예시 — 엣지가 아니다.
+    links = extract_wikilinks("링크는 `[[fake]]` 처럼 씁니다.")
+    assert links == ()
+
+
+def test_wikilink_inside_fence_excluded() -> None:
+    body = "본문 시작\n```\n[[fake]]\n```\n본문 끝"
+    assert extract_wikilinks(body) == ()
+
+
+def test_mixed_real_and_code_only_real_kept() -> None:
+    body = (
+        "정상 링크 [[real]] 는 남고,\n"
+        "인라인 `[[fake1]]` 과\n"
+        "~~~\n[[fake2]]\n~~~\n"
+        "코드 안은 빠진다."
+    )
+    assert [l.target for l in extract_wikilinks(body)] == ["real"]
+
+
+def test_unclosed_fence_treated_as_code_to_end() -> None:
+    body = "앞 [[real]]\n```\n[[fake]]\n여기서 펜스 안 닫힘 [[also-fake]]"
+    assert [l.target for l in extract_wikilinks(body)] == ["real"]
+
+
+# ---------------------------------------------------------------------------
 # Required Frontmatter + up + links
 # ---------------------------------------------------------------------------
 

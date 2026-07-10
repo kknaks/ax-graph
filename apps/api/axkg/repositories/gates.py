@@ -212,6 +212,39 @@ class GateRepository:
         ).all()
         return [_revision_to_dto(row) for row in rows]
 
+    async def list_reviewable_revisions_by_gate(
+        self, gate_id: uuid.UUID
+    ) -> list[ApprovalGateRevisionDTO]:
+        """게이트의 reviewable revision만(형제 supersede sweep용). version 오름차순."""
+        rows = (
+            await self._session.scalars(
+                sa.select(ApprovalGateRevision)
+                .where(
+                    ApprovalGateRevision.gate_id == gate_id,
+                    ApprovalGateRevision.status == "reviewable",
+                )
+                .order_by(ApprovalGateRevision.version.asc())
+            )
+        ).all()
+        return [_revision_to_dto(row) for row in rows]
+
+    async def supersede_other_reviewable_revisions(
+        self, gate_id: uuid.UUID, *, keep_revision_id: uuid.UUID
+    ) -> int:
+        """gate의 reviewable revision 중 keep을 제외한 전부를 superseded로. 전이 건수 반환.
+
+        빠른 연속 재생성으로 형제 reviewable이 병렬 누적됐을 때 dangling(승인/supersede
+        어디에도 안 잡히는 잔존 revision)을 막는다 (SPEC-002 §5/§7 OQ). drafting(실행 중)은
+        대상이 아니다 — reviewable만 sweep한다.
+        """
+        swept = 0
+        for sibling in await self.list_reviewable_revisions_by_gate(gate_id):
+            if sibling.id == keep_revision_id:
+                continue
+            await self.update_revision(sibling.id, status="superseded")
+            swept += 1
+        return swept
+
     async def update_revision(
         self,
         revision_id: uuid.UUID,

@@ -25,6 +25,11 @@
   --tier-ok: 142 71% 45%;
   --tier-caution: 38 92% 50%;
   --tier-risk: 0 84% 60%;
+  /* PARA destination 색 = 그 자료가 그래프에서 가질 노드 색 (document-graph TYPE_COLOR SoT 정합) */
+  --tier-resource: 142 71% 45%; /* = reference 노드 (green) */
+  --tier-area: 262 83% 62%; /* = permanent 노드 (purple) */
+  --tier-project: 38 92% 50%; /* = baseline 노드 (orange) */
+  --tier-archive: 0 0% 45%; /* 문서 안 생김 = 노드 없음 (gray) */
 }
 
 @theme inline {

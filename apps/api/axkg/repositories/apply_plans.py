@@ -23,6 +23,7 @@ def _to_dto(row: ApplyPlan) -> ApplyPlanDTO:
         db_actions=list(row.db_actions or []),
         file_actions=list(row.file_actions or []),
         validation_errors=list(row.validation_errors or []),
+        skipped=list(row.skipped or []),
         applied_at=row.applied_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -48,6 +49,7 @@ class ApplyPlanRepository:
         db_actions: list[Any],
         file_actions: list[Any],
         validation_errors: list[Any],
+        skipped: list[Any] | None = None,
         applied: bool = False,
     ) -> ApplyPlanDTO:
         """gate_revision_id 기준 upsert(revision당 1건). applied=True면 applied_at 기록."""
@@ -62,6 +64,7 @@ class ApplyPlanRepository:
         row.db_actions = list(db_actions)
         row.file_actions = list(file_actions)
         row.validation_errors = list(validation_errors)
+        row.skipped = list(skipped or [])
         if applied:
             row.applied_at = utcnow()
         await self._session.flush()

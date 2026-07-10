@@ -51,6 +51,22 @@ def strip_code_fences(text: str) -> str:
     return match.group(1) if match else text
 
 
+def extract_json_object(text: str) -> str:
+    """첫 '{'부터 마지막 '}'까지를 결정적으로 추출한다.
+
+    claude가 agentic 실행에서 JSON 앞뒤에 해설 문장(프리앰블/후미)을 덧붙여 내는
+    경우가 있어(출력 계약은 "JSON 하나로만"이지만 모델이 종종 어긴다), 파싱 전에
+    바깥 텍스트를 걷어낸다. 경계 추출만 하고 내부 문자열 복구/이스케이프 보정 같은
+    강제복구는 하지 않는다 — '{'나 '}'가 없거나 순서가 어긋나면 원문을 그대로 돌려주고
+    파싱은 뒤에서 OUTPUT_PARSE_FAILED로 표면화된다.
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return text
+    return text[start : end + 1]
+
+
 class TaskDefinitionNotFoundError(Exception):
     """등록되지 않았거나 비활성인 ai_task_definitions key."""
 
@@ -275,8 +291,14 @@ class AiExecutionService:
             )
 
         # 5) 출력 파싱 → 스키마 검증 → 소비 (실패 시 어떤 필드도 소비하지 않음)
+        # 정규화 순서: 코드펜스 제거 → 프리앰블/후미 제거 → json parse.
+        # strict=False: 문자열 내부 리터럴 제어문자(개행·탭 등)를 허용하는 stdlib 표준 관대
+        # 모드. 장문 body_markdown 요약에서 claude가 미이스케이프 개행을 자주 내보내는데
+        # (T-029 실측), JSON 문자열의 리터럴 제어문자는 "이스케이프됐어야 할 문자"로 해석이
+        # 유일해 내용 조작이 없다(강제복구 아님). 미이스케이프 큰따옴표류는 여전히 실패한다.
         try:
-            output = json.loads(strip_code_fences(result.result_text or ""))
+            normalized = extract_json_object(strip_code_fences(result.result_text or ""))
+            output = json.loads(normalized, strict=False)
         except (json.JSONDecodeError, TypeError) as exc:
             return await self._tasks.mark_failed(
                 task_id, error_code=ERROR_OUTPUT_PARSE_FAILED, error_message=str(exc)

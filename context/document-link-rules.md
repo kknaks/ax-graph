@@ -6,6 +6,7 @@
 
 - **본문 `[[ ]]`가 그래프 엣지의 단일 소스다.** frontmatter `up`은 그 위에 계보(lineage) 방향을 얹는 오버레이다.
 - **주입된 컨텍스트 안에서만 링크한다.** 입력으로 받은 documents index 스냅샷(stem/aliases/title/type)에 없는 대상을 `[[ ]]`/`up:`으로 지어내지 않는다. 스냅샷 밖 링크는 승인 시 `BROKEN_WIKILINK`로 거부된다.
+  - **예외 — 같은 제안에서 함께 생성하는 파생 stem**: 이 문서화 제안이 함께 만드는 파생 문서(concept/baseline)의 stem은 스냅샷에 없어도 링크할 수 있고, main→파생 concept의 **SoT 위임 링크는 반드시 걸어야 한다**. executor `_validate`가 이 apply plan이 새로 만드는 stem(plan 내 stem)을 유효 링크로 인정하므로 `BROKEN_WIKILINK`가 되지 않는다.
 - 모든 연결에는 이유(`link_reason`)를 남긴다.
 
 ## 링크 문법
@@ -24,12 +25,14 @@
 | 필드 | 필수 | 규칙 |
 |---|---|---|
 | `type` | yes | `reference` / `permanent` / `concept` / `baseline` / `decision` / `spec` / `work` / `source` 중 하나. `product`라는 타입은 없다 |
-| `id` | yes | 제품 안에서 유일 |
 | `title` | yes | 문서 제목 |
-| `aliases` | 권장 | id와 사람이 찾을 별칭 (`[[id]]` resolve용) |
-| `up` | 선택 | lineage upstream stem 목록 (본문 링크 동반 필수) |
+| `aliases` | 권장 | 사람이 찾을 별칭 목록 (`[[alias]]` resolve용). 링크 resolve는 stem→alias 순 |
+| `up` | 선택 | lineage upstream stem 목록 (`up: []` list 문법, 본문 링크 동반 필수) |
 | `source` | 선택 | 외부 URL — **URL은 그래프 노드가 아니라 속성이다** |
+| `id` | 선택 | Obsidian 호환 resolve용 호환 필드. 링크 대상은 기본적으로 파일 stem으로 잡는다 |
 | `links` | 선택 | 사람이 읽는 추적용 묶음 — **그래프 엣지로 쓰이지 않는다** |
+
+> 링크 resolve는 `stem → alias → id` 순으로 코드가 처리한다(Obsidian 호환). 새 문서 frontmatter에 `id`를 필수로 넣을 필요는 없다 — stem/alias로 충분하다.
 
 ## 그래프에 대한 사실
 

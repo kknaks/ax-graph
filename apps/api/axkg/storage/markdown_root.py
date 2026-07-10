@@ -10,6 +10,10 @@ import hashlib
 from collections.abc import Iterator
 from pathlib import Path
 
+# 요약 보관 md 서브디렉토리 (PLAN-009-T-014). 이 하위 md는 그래프 인덱싱/스캔 대상이 아니다
+# (보관용 side-output) — iter_markdown이 스캔에서 제외해 절대 노드/엣지/retriever에 들지 않게 한다.
+SUMMARIES_SUBDIR = "summaries"
+
 
 class MarkdownRootError(Exception):
     """markdown root 접근 오류 기본형."""
@@ -97,9 +101,9 @@ class MarkdownRoot:
         return rel
 
     def overwrite(self, rel: str, content: str) -> str:
-        """기존 문서 수정(patch_markdown/update_frontmatter 적용 결과 전체 write).
+        """기존 문서 전문 교체(overwrite_markdown): 실행측이 만든 최종 본문(draft_markdown)을 전체 write.
 
-        diff/patch를 우선하되, MVP는 실행측이 만든 최종 본문(draft_markdown)을 전체 write한다.
+        A1 모델 — 부분 patch가 아니라 수정 전문 overwrite다(SPEC-004).
         경로 안전을 거치고 root 하위에만 쓴다.
         """
         path = self.resolve(rel)
@@ -107,10 +111,23 @@ class MarkdownRoot:
         path.write_text(content, encoding="utf-8")
         return rel
 
+    def remove(self, rel: str) -> bool:
+        """옛 경로 문서를 제거(경로 변경 재문서화, SPEC-004 Document Lifecycle).
+
+        경로 안전을 거쳐 root 하위 파일만 지운다. 이미 없으면 False(멱등). 옛 버전 본문은
+        DB 게이트 revision과 superseded Document에 박제돼 있으므로 파일 제거는 안전하다.
+        """
+        path = self.resolve(rel)
+        if not path.is_file():
+            return False
+        path.unlink()
+        return True
+
     def iter_markdown(self) -> Iterator[str]:
         """root 하위 모든 `*.md`의 상대 경로(posix)를 정렬 순서로 yield 한다.
 
-        root 밖을 가리키는 심볼릭 링크 파일은 건너뛴다(경로 안전).
+        root 밖을 가리키는 심볼릭 링크 파일은 건너뛴다(경로 안전). 요약 보관용
+        `summaries/` 하위는 그래프 대상이 아니므로 스캔에서 제외한다(PLAN-009-T-014).
         """
         if not self._root.is_dir():
             return
@@ -120,4 +137,7 @@ class MarkdownRoot:
             resolved = path.resolve()
             if resolved != self._root and self._root not in resolved.parents:
                 continue
-            yield path.relative_to(self._root).as_posix()
+            rel = path.relative_to(self._root).as_posix()
+            if rel.split("/", 1)[0] == SUMMARIES_SUBDIR:
+                continue
+            yield rel

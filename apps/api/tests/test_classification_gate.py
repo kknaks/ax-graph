@@ -24,6 +24,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from axkg.dto.ai import AiTaskDTO
 from axkg.integrations.open_kknaks import (
     OpenKknaksClient,
     OpenKknaksTaskRequest,
@@ -33,6 +34,7 @@ from axkg.models.base import utcnow
 from axkg.repositories.ai_tasks import AiTaskRepository
 from axkg.repositories.gates import GateRepository
 from axkg.repositories.sources import SourceRepository
+from axkg.services.ai.classification_gate import ClassificationGateContextBuilder
 from axkg.services.classification_gate_execution import execute_classification_gate
 from axkg.services.gates import (
     FeedbackTooShortError,
@@ -432,6 +434,132 @@ async def test_regenerate_wires_resume_and_supersedes_v1(
         assert revisions[1].status == "superseded"  # v1 read-only 보존
         assert revisions[2].status == "reviewable"
         assert revisions[2].payload["form"]["destination_type"] == "area"
+
+
+# ---------------------------------------------------------------------------
+# 형제 reviewable supersede sweep (PLAN-009-T-039, SPEC-002 §5/§7 OQ)
+# ---------------------------------------------------------------------------
+
+
+def _fake_task(
+    *, source_id: uuid.UUID, gate_id: uuid.UUID, revision_id: uuid.UUID
+) -> AiTaskDTO:
+    """handle_result가 읽는 최소 필드만 담은 실행 task DTO(재생성 완료 시뮬레이션)."""
+    return AiTaskDTO(
+        id=uuid.uuid4(),
+        task_type="regenerate_classification_gate",
+        status="running",
+        provider="claude",
+        source_id=source_id,
+        gate_id=gate_id,
+        revision_id=revision_id,
+        open_kknaks_session_id="okk-sess-x",
+        queued_at=utcnow(),
+    )
+
+
+async def test_handle_result_sweeps_parallel_reviewable_siblings(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # v1 reviewable 상태에서 v2·v3가 v1을 부모로 병렬 생성(빠른 연속 재생성)됐다 가정.
+    source_id = await _create_and_execute(
+        session_factory,
+        result_text=json.dumps(VALID_CLASSIFICATION),
+        session_id="okk-sess-v1",
+    )
+    async with session_factory() as session:
+        gates = GateRepository(session)
+        gate = await _classification_gate(session, source_id)
+        gate_id, v1_id = gate.id, gate.active_revision_id
+        v2 = await gates.create_revision(
+            gate_id=gate_id,
+            version=await gates.next_version(gate_id),
+            status="drafting",
+            payload={},
+            form_schema_version="classification.v1",
+            parent_revision_id=v1_id,
+        )
+        v3 = await gates.create_revision(
+            gate_id=gate_id,
+            version=await gates.next_version(gate_id),
+            status="drafting",
+            payload={},
+            form_schema_version="classification.v1",
+            parent_revision_id=v1_id,
+        )
+        await session.commit()
+        v2_id, v3_id = v2.id, v3.id
+
+    # v2 완료 → v1 superseded, v2 reviewable
+    async with session_factory() as session:
+        await ClassificationGateContextBuilder(session).handle_result(
+            _fake_task(source_id=source_id, gate_id=gate_id, revision_id=v2_id),
+            VALID_CLASSIFICATION_V2,
+        )
+        await session.commit()
+    # v3 완료 → v2 superseded, v3 reviewable (parent 단건 supersede라면 v2가 잔존했을 것)
+    async with session_factory() as session:
+        await ClassificationGateContextBuilder(session).handle_result(
+            _fake_task(source_id=source_id, gate_id=gate_id, revision_id=v3_id),
+            VALID_CLASSIFICATION_V2,
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        gates = GateRepository(session)
+        revs = {r.id: r for r in await gates.list_revisions_by_gate(gate_id)}
+        assert revs[v1_id].status == "superseded"
+        assert revs[v2_id].status == "superseded"
+        assert revs[v3_id].status == "reviewable"
+        # 최신 하나만 reviewable
+        reviewable = await gates.list_reviewable_revisions_by_gate(gate_id)
+        assert [r.id for r in reviewable] == [v3_id]
+        # dangling(reviewable/approved/superseded 밖 상태) 0
+        assert all(
+            r.status in {"reviewable", "approved", "superseded"} for r in revs.values()
+        )
+
+
+async def test_approve_supersedes_leftover_reviewable_sibling(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # 승인 안전망: active 승인 시 병렬 누적된 형제 reviewable이 전부 superseded 돼야 한다.
+    source_id = await _create_and_execute(
+        session_factory, result_text=json.dumps(VALID_CLASSIFICATION)
+    )
+    async with session_factory() as session:
+        gates = GateRepository(session)
+        gate = await _classification_gate(session, source_id)
+        gate_id, active_id = gate.id, gate.active_revision_id
+        sibling = await gates.create_revision(
+            gate_id=gate_id,
+            version=await gates.next_version(gate_id),
+            status="reviewable",
+            payload={
+                "schema_version": "classification.v1",
+                "gate_kind": "classification",
+                "source_id": str(source_id),
+                "form": {"destination_type": "resource"},
+                "warnings": [],
+            },
+            form_schema_version="classification.v1",
+            parent_revision_id=active_id,
+        )
+        await session.commit()
+        sibling_id = sibling.id
+
+    async with session_factory() as session:
+        await GateService(session).approve(gate_id)
+        await session.commit()
+
+    async with session_factory() as session:
+        gates = GateRepository(session)
+        revs = {r.id: r for r in await gates.list_revisions_by_gate(gate_id)}
+        assert revs[active_id].status == "approved"
+        assert revs[sibling_id].status == "superseded"
+        # approved 1 + dangling(reviewable 잔존) 0
+        assert sum(1 for r in revs.values() if r.status == "approved") == 1
+        assert await gates.list_reviewable_revisions_by_gate(gate_id) == []
 
 
 # ---------------------------------------------------------------------------

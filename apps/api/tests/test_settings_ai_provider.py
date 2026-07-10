@@ -299,6 +299,55 @@ async def test_settings_change_not_retroactive_to_existing_task(
 
 
 # ---------------------------------------------------------------------------
+# 문서화 실행 옵션 시드 정합 (PLAN-009-T-035, 2026-07-09 라이브 실측)
+# ---------------------------------------------------------------------------
+
+
+async def test_documentation_gate_seed_execution_options(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # seed가 문서화③ 2건에 max_turns 12 / timeout_sec 600을 SSOT로 심어야 한다
+    # (DB 리셋 후에도 라이브 실측 값이 증발하지 않도록).
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                sa.select(AiTaskDefinition).where(
+                    AiTaskDefinition.key.in_(
+                        ["generate_documentation_gate", "regenerate_documentation_gate"]
+                    )
+                )
+            )
+        ).scalars().all()
+    by_key = {d.key: d for d in rows}
+    assert set(by_key) == {
+        "generate_documentation_gate",
+        "regenerate_documentation_gate",
+    }
+    for definition in by_key.values():
+        assert definition.default_provider_options == {"max_turns": 12}
+        assert definition.default_options == {"timeout_sec": 600}
+
+
+async def test_documentation_gate_resolved_config_reflects_seed(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # definition 기본값이 실행 설정 해석에 병합돼 실제 queued task 스냅샷에 반영되는지 확인.
+    async with session_factory() as session:
+        service = AiExecutionService(
+            session, client=_DummyClient(), registry=ContextBuilderRegistry()
+        )
+        doc_task = await service.create_task("generate_documentation_gate")
+        # 전역 기본값(max_turns 3 / timeout_sec 300)은 그대로 — 문서화 정의만 override.
+        summary_task = await service.create_task("collect_source_summary")
+        await session.commit()
+
+    assert doc_task.provider_options["max_turns"] == 12
+    assert doc_task.options["timeout_sec"] == 600
+    assert summary_task.provider_options["max_turns"] == 3
+    assert summary_task.options["timeout_sec"] == 300
+
+
+# ---------------------------------------------------------------------------
 # 인증
 # ---------------------------------------------------------------------------
 

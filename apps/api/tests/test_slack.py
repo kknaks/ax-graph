@@ -46,6 +46,7 @@ VALID_SUMMARY = {
     "summary": "문서 그래프를 검색 컨텍스트로 삼는 RAG 설계 요약.",
     "keywords": ["graph-rag"],
     "source_type": "article",
+    "body_markdown": "## 배경\n문서 그래프를 검색 컨텍스트로 삼는다.",
 }
 
 

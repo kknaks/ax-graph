@@ -88,7 +88,8 @@ export function TemplatesTab() {
       listLabel="Template List"
       listFoot={
         <p className="font-mono text-[10px] text-muted-foreground">
-          MVP = reference · permanent (project_baseline 은 SPEC-010 OQ)
+          문서 타입 4종 = reference · permanent · project_baseline · concept
+          (main 3종은 destination 매핑, concept 은 문서화③ 조립 동봉)
         </p>
       }
       fields={[

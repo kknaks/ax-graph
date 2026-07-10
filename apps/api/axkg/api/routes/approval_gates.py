@@ -34,13 +34,19 @@ from axkg.services.gates import (
 from axkg.workers.apply_executor import ApplyValidationError
 
 # apply 검증 실패 코드 → HTTP status (SPEC-004 Case Matrix). 기본 409.
-_APPLY_ERROR_STATUS = {"DRAFT_NOT_READY": 409, "PATH_NOT_ALLOWED": 422}
+# SUPPLEMENT_TARGET_NOT_CONCEPT: PLAN-009-T-036 임시 표면화 — 스펙 등재는 curator 후속.
+_APPLY_ERROR_STATUS = {
+    "DRAFT_NOT_READY": 409,
+    "PATH_NOT_ALLOWED": 422,
+    "SUPPLEMENT_TARGET_NOT_CONCEPT": 422,
+}
 _APPLY_ERROR_MESSAGE = {
     "BROKEN_WIKILINK": "연결할 문서를 찾지 못했습니다.",
     "UP_WITHOUT_BODY_LINK": "계보 링크는 본문 링크도 필요합니다.",
     "DUPLICATE_STEM": "같은 파일 식별자가 이미 있습니다.",
     "PATH_NOT_ALLOWED": "허용되지 않은 문서 경로입니다.",
     "DRAFT_NOT_READY": "초안이 아직 준비되지 않았습니다.",
+    "SUPPLEMENT_TARGET_NOT_CONCEPT": "보충은 개념(concept) 노트만 대상으로 할 수 있습니다.",
 }
 
 router = APIRouter(prefix="/gates", tags=["gates"])

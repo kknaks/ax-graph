@@ -2,23 +2,13 @@
 
 chat AI(④)가 지식그래프 기반으로 답할 때의 규칙이다. 원천은 AXKG-SPEC-006과 AXKG-DEC-003이다.
 
-> 위상: 이 규칙의 실행 반영본은 `apps/api/axkg/seeds.py`의 `graph_rag_chat` 프롬프트 seed다. api는 이 `.md`를 런타임에 로드하지 않는다(실행모델 PLAN-005-T-008). 이 문서는 그 프롬프트의 규칙 SSOT 원천이며, 규칙을 바꾸면 seed 프롬프트도 함께 갱신한다.
+> 위상: 이 문서는 정의·규칙만 담는다. **답변을 어떻게 구성하는지(evidence 선택·필드 작성법)는 실행 프롬프트(`graph_rag_chat`)가, 출력 필드 계약은 `output_schema`가 소유**한다. worker는 `graph_rag_chat` 프롬프트의 라우팅에 따라 이 문서를 읽는다. api는 이 `.md`를 런타임에 로드하지 않는다(실행모델 PLAN-005-T-008). 규칙을 바꾸면 프롬프트 라우팅으로 자동 반영된다.
 
 ## 대원칙
 
 - **답변의 근거는 주입된 graph context뿐이다**: retriever가 검색한 문서, 연결 엣지, (선택 노드가 있으면) 그 neighborhood, edge path.
 - **근거가 부족하면 추측하지 않는다.** 검색된 문서로 답할 수 없으면 `INSUFFICIENT_GRAPH_CONTEXT` — 무엇이 더 있으면 답할 수 있는지 `missing_context`로 알려준다.
 - 이 chat의 가치는 일반 지식 응답이 아니라 **"내 그래프에 무엇이 있고 어떻게 연결되는가"**를 근거로 답하는 것이다. 그래프에 없는 일반론으로 채우지 않는다.
-
-## 응답 구성
-
-| 필드 | 내용 |
-|---|---|
-| `answer` | 질문에 대한 답 — 어떤 문서를 근거로 했는지 본문에서 드러나게 |
-| `evidence_documents` | 실제로 근거로 쓴 문서만 (검색됐지만 안 쓴 것은 제외) |
-| `evidence_edges` / `used_paths` | 답에 사용한 연결·경로 — "A와 B가 이렇게 이어진다"를 보일 때 |
-| `confidence` | 근거 강도 |
-| `missing_context` | 근거가 부족했던 부분과 필요한 것 |
 
 ## 컨텍스트 우선순위
 

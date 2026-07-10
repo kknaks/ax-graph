@@ -1,7 +1,8 @@
 """documents API 요청/응답 (AXKG-SPEC-005 Interface Contract).
 
 FE Phase 4(그래프 뷰)가 이 계약을 소비한다 — 응답 스키마를 임의로 바꾸지 않는다.
-- Document 조회: 인덱스 필드(본문 body는 Markdown SoT라 응답에 싣지 않는다).
+- Document 조회: 인덱스 필드 + 단건 상세만 `markdown_full`(frontmatter+본문 전문)을 요청 시점에
+  markdown root에서 read-through(DB에 본문 저장 금지, md=SoT). 목록에는 싣지 않는다(payload 비대 방지).
 - Links: wikilink(assoc out) / up(lineage out) / backlink(incoming) 3분할.
 - Link Preview: 생성 경로 검증(BROKEN_WIKILINK/UP_WITHOUT_BODY_LINK/DUPLICATE_STEM).
 """
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 from axkg.dto.document import DocumentDTO
 from axkg.services.documents import DocumentLinks, LinkView
 from axkg.services.graph import LinkIssue, LinkPreview, LinkPreviewEntry
+from axkg.services.stale import StaleDocumentView, StaleMarkView
 
 
 class DocumentResponse(BaseModel):
@@ -28,9 +30,13 @@ class DocumentResponse(BaseModel):
     indexed_at: datetime
     created_at: datetime
     updated_at: datetime
+    # 단건 상세 read-through 전용. 목록 응답에서는 None으로 남는다(파일을 읽지 않음).
+    markdown_full: str | None = None
 
     @classmethod
-    def from_dto(cls, dto: DocumentDTO) -> "DocumentResponse":
+    def from_dto(
+        cls, dto: DocumentDTO, *, markdown_full: str | None = None
+    ) -> "DocumentResponse":
         return cls(
             id=dto.id,
             path=dto.path,
@@ -44,6 +50,7 @@ class DocumentResponse(BaseModel):
             indexed_at=dto.indexed_at,
             created_at=dto.created_at,
             updated_at=dto.updated_at,
+            markdown_full=markdown_full,
         )
 
 
@@ -91,6 +98,56 @@ class DocumentLinksResponse(BaseModel):
             up=[LinkResponse.from_view(v) for v in links.up],
             backlinks=[LinkResponse.from_view(v) for v in links.backlinks],
         )
+
+
+class StaleMarkResponse(BaseModel):
+    """stale 배지 상세 (SPEC-004 §E). "영향 가능성 있음" 표시일 뿐 "수정 필요" 판단이 아니다."""
+
+    concept_stem: str
+    concept_path: str | None = None
+    change_summary: str | None = None
+    marked_at: datetime
+
+    @classmethod
+    def from_view(cls, view: StaleMarkView) -> "StaleMarkResponse":
+        return cls(
+            concept_stem=view.concept_stem,
+            concept_path=view.concept_path,
+            change_summary=view.change_summary,
+            marked_at=view.marked_at,
+        )
+
+
+class StaleDocumentResponse(BaseModel):
+    """stale 문서 하나 + 그 문서를 유발한 concept 배지 목록."""
+
+    document_id: uuid.UUID
+    path: str
+    title: str
+    document_type: str
+    stale_marks: list[StaleMarkResponse]
+
+    @classmethod
+    def from_view(cls, view: StaleDocumentView) -> "StaleDocumentResponse":
+        return cls(
+            document_id=view.document_id,
+            path=view.path,
+            title=view.title,
+            document_type=view.document_type,
+            stale_marks=[StaleMarkResponse.from_view(m) for m in view.stale_marks],
+        )
+
+
+class StaleListResponse(BaseModel):
+    documents: list[StaleDocumentResponse]
+
+
+class StaleDismissResponse(BaseModel):
+    """배지 해제 결과(멱등). dismissed_count=0이어도 200."""
+
+    document_id: uuid.UUID
+    status: str = "dismissed"
+    dismissed_count: int
 
 
 class LinkPreviewRequest(BaseModel):
