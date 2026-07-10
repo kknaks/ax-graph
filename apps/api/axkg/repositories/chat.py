@@ -215,6 +215,21 @@ class ChatRepository:
         row = await self._session.get(GraphChatMessage, message_id)
         return _message_dto(row) if row is not None else None
 
+    async def set_message_run_id(
+        self, message_id: uuid.UUID, run_id: uuid.UUID
+    ) -> ChatMessageDTO | None:
+        """user 메시지에 진행 중 run을 역참조로 새긴다 (AXKG-SPEC-006, T-013).
+
+        FE가 세션 재개 시 assistant 응답이 아직 없는 user 메시지의 run_id로 폴링을 잇는다.
+        run은 user_message_id를 참조하므로 message 생성 → run 생성 후 이 메서드로 채운다.
+        """
+        row = await self._session.get(GraphChatMessage, message_id)
+        if row is None:
+            return None
+        row.run_id = run_id
+        await self._session.flush()
+        return _message_dto(row)
+
     async def next_sequence_no(self, session_id: uuid.UUID) -> int:
         current = await self._session.scalar(
             sa.select(sa.func.max(GraphChatMessage.sequence_no)).where(

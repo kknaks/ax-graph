@@ -518,3 +518,70 @@ async def test_regenerate_approval_clears_stale(
         assert doc.version == 2
         assert doc.status == "current"
     assert "판단 갱신" in (markdown_root / "permanent/my-area-note.md").read_text("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 재생성 시 소스 승인 탭 재노출 → v2 승인 시 완료 탭 재숨김 (T-017)
+# ---------------------------------------------------------------------------
+
+
+async def _source_id_of(
+    session_factory: async_sessionmaker[AsyncSession], permanent_id: uuid.UUID
+) -> uuid.UUID:
+    async with session_factory() as session:
+        doc = await DocumentRepository(session).get(permanent_id)
+        assert doc.source_id is not None
+        return doc.source_id
+
+
+async def test_regeneration_reexposes_source_then_hides_on_v2_approval(
+    session_factory: async_sessionmaker[AsyncSession], markdown_root: Path
+) -> None:
+    permanent_id = await _make_stale_permanent(session_factory, markdown_root)
+    source_id = await _source_id_of(session_factory, permanent_id)
+
+    # 최초 문서화 완료 상태: documented + 완료 탭(비노출).
+    async with session_factory() as session:
+        source = await SourceRepository(session).get(source_id)
+        assert source.status == "documented"
+        assert source.visible_in_inbox is False
+
+    # 재생성 오픈 → 소스가 완료 탭에서 나와 승인 탭으로 재노출.
+    async with session_factory() as session:
+        result = await GateService(session).open_stale_regeneration(permanent_id)
+        await session.commit()
+        regen = (result.ai_task.id, result.gate.id, result.revision.id)
+
+    async with session_factory() as session:
+        source = await SourceRepository(session).get(source_id)
+        assert source.status == "summarized"  # documented 아님 → FE inTab 승인 탭 대상
+        assert source.visible_in_inbox is True  # 기본 목록(GET /sources)에 재등장
+        # FE inTab 승인 탭 계약: status!=documented AND inbox_label truthy.
+        labels = await GateService(session).derive_inbox_labels([source])
+        assert labels[source_id] == "classify_approved"
+        # 기본 Inbox 목록에도 실제로 포함된다.
+        listed = await SourceRepository(session).list()
+        assert source_id in {s.id for s in listed}
+
+    # v2 실행 + 승인 → 기존 documented 경로가 소스를 완료 탭으로 재숨김.
+    v2_doc = {
+        "document_draft": {
+            "filename_candidate": "my-area-note.md",
+            "markdown_full": _permanent_md("내 전략 노트", "v2: [[concept-x]] 갱신 반영."),
+        },
+        "derived_suggestions": [],
+    }
+    done = await execute_documentation_gate(
+        *regen, client=FakeClient(result_text=json.dumps(v2_doc)),
+        session_factory=session_factory,
+    )
+    assert done.status == "succeeded", done.error_message
+    await _approve(session_factory, regen[1])
+
+    async with session_factory() as session:
+        source = await SourceRepository(session).get(source_id)
+        assert source.status == "documented"
+        assert source.visible_in_inbox is False
+        # 기본 Inbox 목록에서 다시 빠진다(완료 탭 전용).
+        listed = await SourceRepository(session).list()
+        assert source_id not in {s.id for s in listed}

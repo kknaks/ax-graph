@@ -78,9 +78,15 @@ function toStaleList(payload: StaleListPayload): StaleDocument[] {
 }
 
 /** 재생성 응답 = GateResponse (T-030 최종 계약) — producing source 의 문서화 게이트가
- * 재문서화(v++)로 열린다. root 에 source_id 가 있어 게이트 스택으로 이동할 때 사용한다. */
+ * 재문서화(v++)로 열린다. BE `regenerate_stale_document`가 GateResponse.from_dto 를 반환하므로
+ * gate id·source_id·status 로 진행 상태를 표시하고 게이트 스택으로 이동한다(PLAN-010-T-015). */
 export interface RegenerateResult {
+  /** 재문서화로 열린 문서화 게이트 id. */
+  id?: string | null;
   source_id?: string | null;
+  gate_kind?: string;
+  /** approval_gates.status — regenerating/generating 이면 AI 재생성 진행 중. */
+  status?: string;
   document_id?: string | null;
 }
 

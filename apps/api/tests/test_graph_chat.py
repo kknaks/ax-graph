@@ -134,6 +134,52 @@ async def test_add_message_increments_sequence_and_new_run(
     assert detail["messages"][1]["content"] == "두 번째 질문"
 
 
+# ---------------------------------------------------------------------------
+# user 메시지 run_id 역참조 (T-013) — 세션 재개 폴링용
+# ---------------------------------------------------------------------------
+
+
+async def test_user_message_run_id_backreference_both_paths(
+    client: AsyncClient,
+) -> None:
+    # start_chat + add_message 두 경로 모두 user 메시지 run_id가 진행 중 run으로 채워진다.
+    headers = await _auth(client, SEED_EMAIL, SEED_PASSWORD)
+    created = (
+        await client.post("/graph/chats", json={"question": "첫 질문"}, headers=headers)
+    ).json()
+    chat_id = created["chat_id"]
+    second = (
+        await client.post(
+            f"/graph/chats/{chat_id}/messages",
+            json={"question": "두 번째 질문"},
+            headers=headers,
+        )
+    ).json()
+
+    detail = (await client.get(f"/graph/chats/{chat_id}", headers=headers)).json()
+    msgs = detail["messages"]
+    assert len(msgs) == 2
+    # NULL 아님 + 각 user 메시지가 자기 턴의 run을 역참조한다.
+    assert msgs[0]["run_id"] == created["run_id"]  # start_chat 경로 (seq=1)
+    assert msgs[1]["run_id"] == second["run_id"]  # add_message 경로 (seq=2)
+    assert msgs[0]["run_id"] is not None and msgs[1]["run_id"] is not None
+
+
+async def test_append_turn_returns_message_with_run_id(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # 서비스 반환 DTO에도 run_id가 반영된다(라우트가 아닌 서비스 계약 확인).
+    async with session_factory() as s:
+        user = User(email="rr@medisolveai.com", password_hash=hash_password("x"))
+        s.add(user)
+        await s.flush()
+        _, message, run = await ChatService(s).start_chat(
+            user_id=user.id, question="run 역참조"
+        )
+        assert message.run_id == run.id
+        await s.commit()
+
+
 async def test_list_chats_only_returns_owner_sessions(
     client: AsyncClient, other_headers: dict[str, str]
 ) -> None:

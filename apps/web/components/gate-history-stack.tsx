@@ -773,6 +773,25 @@ export function GateHistoryStack({
   if (source.status === "documented") {
     const active = documentationGate ? activeRevisionOf(documentationGate) : null;
     const doneDraft = (active?.payload.form as DocumentationForm | undefined)?.document_draft;
+
+    // 재생성 구멍 보정(PLAN-010-T-016): stale 재생성으로 문서화 게이트가 v++ 재열림하면
+    // source.status 는 documented 그대로지만 게이트는 regenerating→review_pending 로 돌아온다.
+    // 게이트가 approved 가 아니면(=재생성 진행/재승인 대기/실패) 완료 배너 대신 게이트 스택을 렌더해
+    // v2 초안 리뷰·승인 표면을 노출한다(기존 DocumentationGateView·handleApproveGate 재사용).
+    if (documentationGate && documentationGate.status !== "approved") {
+      return (
+        <div className="scroll-thin h-full min-h-0 space-y-4 overflow-y-auto">
+          <DocumentationGateView
+            gate={documentationGate}
+            source={source}
+            gateBusyId={gateBusyId}
+            onGateFeedback={onGateFeedback}
+            onApproveGate={onApproveGate}
+            onRetryGate={onRetryGate}
+          />
+        </div>
+      );
+    }
     return (
       <div className="scroll-thin h-full min-h-0 space-y-4 overflow-y-auto">
         <section className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">

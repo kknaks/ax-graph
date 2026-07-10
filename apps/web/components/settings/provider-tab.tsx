@@ -170,11 +170,9 @@ export function ProviderTab() {
     setOverrideBusy(true);
     setOverrideError(null);
     try {
-      const next = await putTaskOverride(taskKey, {
-        model: value.model ?? null,
-        options: value.options ?? {},
-        provider_options: value.provider_options ?? {},
-      });
+      // 모달이 조립한 "명시 설정 필드만" 그대로 보낸다(PLAN-010-T-014). 여기서 model:null·빈
+      // options를 재주입하지 않는다 — 미설정 필드가 definition 값을 덮는 사고를 막는다.
+      const next = await putTaskOverride(taskKey, value);
       applySettings(next);
       setOverrideDraft(null);
     } catch (err) {
@@ -504,6 +502,10 @@ export function ProviderTab() {
         draft={overrideDraft}
         provider={(baseline?.provider ?? draft.provider) as Provider}
         existingKeys={overrideKeys}
+        defaults={{
+          timeout_sec: settings.options?.timeout_sec ?? null,
+          max_turns: settings.provider_options?.max_turns ?? null,
+        }}
         busy={overrideBusy}
         error={overrideError}
         onClose={() => (overrideBusy ? undefined : setOverrideDraft(null))}

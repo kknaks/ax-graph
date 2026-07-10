@@ -97,6 +97,28 @@ function RegenerateIcon({ className }: { className?: string }) {
   );
 }
 
+function SpinnerIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={`animate-spin ${className ?? ""}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}
+
+/** 재생성 진행 정보 — producing source 문서화 게이트로의 이동 좌표(세션 내 유지). */
+export interface StaleRegenInfo {
+  sourceId: string | null;
+  gateId: string | null;
+}
+
 /** 유발 concept 요약: [[stem]] + 복수면 "외 N개". 목록 행/헤더에서 공용. */
 function conceptSummary(doc: StaleDocument) {
   const marks = doc.stale_marks ?? [];
@@ -113,6 +135,7 @@ export function StaleList({
   filter,
   loading,
   error,
+  regeneratingIds,
   onSelect,
   onFilterChange,
   onOpenModal,
@@ -122,6 +145,8 @@ export function StaleList({
   filter: StatusFilter;
   loading: boolean;
   error: string | null;
+  /** 재생성 진행 중인 document_id 집합(세션 내) — 행에 진행 표시. */
+  regeneratingIds?: Set<string>;
   onSelect: (doc: StaleDocument) => void;
   onFilterChange: (filter: StatusFilter) => void;
   /** +inbox — Direct Inbox 모달 열기(SourceList 헤더와 동일 진입점). */
@@ -181,6 +206,7 @@ export function StaleList({
           items.map((doc) => {
             const active = doc.document_id === selectedId;
             const { first, extra } = conceptSummary(doc);
+            const regenerating = regeneratingIds?.has(doc.document_id) ?? false;
             return (
               <button
                 key={doc.document_id}
@@ -195,12 +221,22 @@ export function StaleList({
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-xs font-medium">{doc.title}</span>
-                  <span
-                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                    style={STALE_BADGE_STYLE}
-                  >
-                    영향 가능성
-                  </span>
+                  {regenerating ? (
+                    <span
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                      style={STALE_BADGE_STYLE}
+                    >
+                      <SpinnerIcon className="h-2.5 w-2.5" />
+                      재생성 중
+                    </span>
+                  ) : (
+                    <span
+                      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                      style={STALE_BADGE_STYLE}
+                    >
+                      영향 가능성
+                    </span>
+                  )}
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
                   {doc.document_type}
@@ -225,15 +261,21 @@ export function StaleList({
 export function StaleDetail({
   doc,
   busyId,
+  regenerating,
   onDismiss,
   onRegenerate,
+  onOpenGate,
 }: {
   /** 선택된 stale 문서. null 이면 안내 플레이스홀더. */
   doc: StaleDocument | null;
-  /** dismiss/regenerate 진행 중인 document_id (버튼 비활성). */
+  /** dismiss/regenerate 요청 진행 중인 document_id (버튼 비활성). */
   busyId: string | null;
+  /** 이 문서의 재생성이 진행 중이면 게이트 이동 좌표, 아니면 null. */
+  regenerating?: StaleRegenInfo | null;
   onDismiss: (doc: StaleDocument) => void;
   onRegenerate: (doc: StaleDocument) => void;
+  /** 진행 중 "게이트에서 보기" — producing source 문서화 게이트 스택으로 이동. */
+  onOpenGate: (doc: StaleDocument) => void;
 }) {
   // 현재 문서 본문(GET /documents/{id}) — 선택 전환 시 재로드. 접기/펴기.
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
@@ -282,6 +324,8 @@ export function StaleDetail({
 
   const marks = doc.stale_marks ?? [];
   const busy = busyId === doc.document_id;
+  const isRegenerating = !!regenerating;
+  const actionsDisabled = busy || isRegenerating;
   const body = detail ? documentBody(detail) : null;
 
   return (
@@ -388,6 +432,34 @@ export function StaleDetail({
         </div>
       </div>
 
+      {/* 재생성 진행 중 배너 — 게이트 재열림 + 큐잉이 눈에 보이게 + 게이트 스택으로 이동 안내 */}
+      {isRegenerating && (
+        <div
+          className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-2.5 text-[11px]"
+          style={STALE_BADGE_STYLE}
+        >
+          <span className="inline-flex items-center gap-1.5 font-medium">
+            <SpinnerIcon className="h-3.5 w-3.5" />
+            재생성 진행 중
+          </span>
+          <span className="text-foreground/70">
+            원본 소스의 문서화 게이트가 재열렸습니다. v2 초안 검토·승인은 게이트에서 진행됩니다.
+          </span>
+          {regenerating?.sourceId && (
+            <button
+              type="button"
+              onClick={() => onOpenGate(doc)}
+              className="ml-auto inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground hover:bg-secondary"
+            >
+              게이트에서 보기
+              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M5 12h14M13 6l6 6-6 6" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 액션 — 하단 우측: [판단 유효 · 배지 해제](dismiss) / [재검토 · 재생성](regenerate) */}
       <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-4 py-3">
         {busy && (
@@ -395,7 +467,7 @@ export function StaleDetail({
         )}
         <button
           type="button"
-          disabled={busy}
+          disabled={actionsDisabled}
           onClick={() => onDismiss(doc)}
           className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-secondary disabled:opacity-50"
         >
@@ -404,12 +476,12 @@ export function StaleDetail({
         </button>
         <button
           type="button"
-          disabled={busy}
+          disabled={actionsDisabled}
           onClick={() => onRegenerate(doc)}
           className="inline-flex items-center gap-1.5 rounded-md border border-ring bg-secondary px-3 py-1.5 text-xs font-medium hover:bg-secondary/70 disabled:opacity-50"
         >
-          <RegenerateIcon className="h-3.5 w-3.5" />
-          재검토 · 재생성
+          {isRegenerating ? <SpinnerIcon className="h-3.5 w-3.5" /> : <RegenerateIcon className="h-3.5 w-3.5" />}
+          {isRegenerating ? "재생성 진행 중" : "재검토 · 재생성"}
         </button>
       </div>
     </section>

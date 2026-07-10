@@ -147,10 +147,17 @@ export interface PutAIProviderRequest {
   provider_options: ProviderOptions;
 }
 
+/**
+ * task override 저장 payload — **사용자가 명시적으로 설정한 필드만** 담는다(PLAN-010-T-014).
+ * resolution 병합(services/ai/resolution.py `_merge`)은 키 단위 update라, override에 담긴 키만
+ * definition/global 값을 덮는다. 미설정 필드의 키/래퍼를 실으면 definition 값을 덮어써 사고가 난다
+ * (2026-07-10 prod 문서화 timeout 덮어쓰기). 따라서 options/provider_options는 optional이며,
+ * 담긴 내부 키가 없으면 아예 보내지 않는다.
+ */
 export interface PutTaskOverrideRequest {
   model?: string | null;
-  options: ExecutionOptions;
-  provider_options: ProviderOptions;
+  options?: ExecutionOptions;
+  provider_options?: ProviderOptions;
 }
 
 // --- API ---

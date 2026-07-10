@@ -691,6 +691,12 @@ class GateService:
             active_revision_id=revision.id,
             last_ai_task_id=task.id,
         )
+        # 재생성 시작 → source를 완료 탭에서 꺼내 승인 탭으로 재노출한다(확정 UX, T-017).
+        # documented는 visible_in_inbox=false + FE inTab이 승인 탭에서 하드 제외하므로, 최초
+        # 문서화 리뷰와 동일한 상태(summarized + visible)로 되돌린다 — 분류 게이트는 approved
+        # 그대로라 inbox_label=classify_approved가 파생돼 승인 탭에 걸린다(새 상태/라벨 발명 없음).
+        # v2 승인 시 기존 _approve_documentation→mark_documented가 다시 documented로 되돌린다.
+        await self._sources.set_status(doc.source_id, "summarized")
         return GateTaskResult(doc_gate, revision, task)
 
     async def _build_stale_injection(self, doc) -> dict:

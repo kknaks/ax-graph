@@ -31,7 +31,7 @@ import {
 } from "@/lib/api-client/documents";
 import { SourceList, type StatusFilter } from "@/components/source-list";
 import { GateHistoryStack } from "@/components/gate-history-stack";
-import { StaleList, StaleDetail } from "@/components/stale-documents";
+import { StaleList, StaleDetail, type StaleRegenInfo } from "@/components/stale-documents";
 import {
   GateFeedbackModal,
   type FeedbackTarget,
@@ -63,6 +63,9 @@ export function SourceInbox() {
   const [staleBusyId, setStaleBusyId] = useState<string | null>(null);
   // 재검토 탭 좌 목록에서 선택된 stale 문서 → 우 상세 뷰 대상.
   const [selectedStaleId, setSelectedStaleId] = useState<string | null>(null);
+  // 재생성 진행 중인 stale 문서(세션 내) — document_id → producing gate 좌표. 진행 표시/버튼 잠금/게이트 이동.
+  // BE stale 목록 계약엔 게이트 status가 없어(문서→게이트 역참조 불가) 새로고침 시 유실된다(리포트 한계).
+  const [regeneratingStale, setRegeneratingStale] = useState<Record<string, StaleRegenInfo>>({});
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Source | null>(null);
@@ -263,9 +266,12 @@ export function SourceInbox() {
         await loadGates(gate.source_id, false);
         await patchSource(gate.source_id);
         // 문서화 승인 → source documented (visible=false): inbox/승인에서 빠지고 완료 탭으로.
+        // stale 재생성 v2 승인도 이 경로다 → BE가 배지 해제하므로 재검토 목록/카운트도 최신화한다
+        // (T-015 진행 표시 세션 맵은 목록에서 사라진 문서를 prune 하여 정합)(PLAN-010-T-016).
         if (gate.gate_kind === "documentation") {
           await loadList();
           await loadDocumented();
+          await loadStale();
         }
       } catch (err) {
         // STALE/ALREADY_APPROVED 등은 최신 상태를 다시 불러와 화면을 정합화.
@@ -275,7 +281,7 @@ export function SourceInbox() {
         setGateBusyId(null);
       }
     },
-    [gateBusyId, loadGates, patchSource, loadList, loadDocumented],
+    [gateBusyId, loadGates, patchSource, loadList, loadDocumented, loadStale],
   );
 
   // --- 게이트 실패 재시도 ---
@@ -417,30 +423,25 @@ export function SourceInbox() {
   );
 
   // --- stale [재검토 · 재생성] (SPEC-004 E regenerate) ---
-  // producing source 의 문서화 게이트가 재문서화(v++)로 열린다 → 그 source 를 선택해 기존 게이트
-  // 스택(리뷰/피드백/승인 UI)을 그대로 재사용한다. source_id 미제공(BE shape 미확정) 시 이동 생략.
+  // producing source 의 문서화 게이트가 재문서화(v++)로 열리고 재생성 task가 큐잉된다. 배지 해제는
+  // v2 승인 시점이므로(설계대로) 여기선 문서를 목록에서 지우지 않고 "재생성 진행 중"으로 표시하고
+  // 버튼을 잠근다. 이동은 자동 전환 대신 배너의 "게이트에서 보기"로(사용자가 흐름을 알게).
   const handleRegenerateStale = useCallback(
     async (doc: StaleDocument) => {
-      if (staleBusyId) return;
+      if (staleBusyId || regeneratingStale[doc.document_id]) return;
       setStaleBusyId(doc.document_id);
       setStaleError(null);
       try {
         const result = await regenerateDocument(doc.document_id);
-        const sourceId = result.source_id ?? null;
-        // 재문서화 시작 → stale 배지는 해제 흐름으로 간주해 목록에서 제거 + 재조회 + 상세 선택 해제.
-        setStaleDocs((cur) => cur.filter((d) => d.document_id !== doc.document_id));
-        setSelectedStaleId((cur) => (cur === doc.document_id ? null : cur));
-        if (sourceId) {
-          try {
-            const src = await getSource(sourceId);
-            await selectSource(src); // 우측 게이트 스택 로드 → regenerating 게이트를 폴링이 이어받음
-            // 승인 탭으로 전환해 기존 게이트 스택으로 이동을 눈에 보이게(T-031/T-033 흐름 유지).
-            setFilter("approval");
-          } catch {
-            // source 조회 실패는 조용히 무시 — stale 재조회로 상태만 정합.
-          }
-        }
-        await loadStale();
+        // 진행 상태를 실물 응답(GateResponse)의 gate id·source_id로 세션에 기록 → 진행 표시/이동 좌표.
+        setRegeneratingStale((cur) => ({
+          ...cur,
+          [doc.document_id]: {
+            sourceId: result.source_id ?? null,
+            gateId: result.id ?? null,
+          },
+        }));
+        await loadStale(); // 여전히 stale(배지 미해제)이라 목록에 남고, 진행 표시가 유지된다.
       } catch (err) {
         setStaleError(documentCaseMessage(err, "재생성 게이트를 열지 못했습니다. 최신 상태를 확인해 주세요."));
         await loadStale();
@@ -448,8 +449,33 @@ export function SourceInbox() {
         setStaleBusyId(null);
       }
     },
-    [staleBusyId, loadStale, selectSource],
+    [staleBusyId, regeneratingStale, loadStale],
   );
+
+  // --- 진행 중 "게이트에서 보기": producing source 문서화 게이트 스택으로 이동(기존 스택 재사용) ---
+  const openStaleGate = useCallback(
+    async (doc: StaleDocument) => {
+      const info = regeneratingStale[doc.document_id];
+      if (!info?.sourceId) return;
+      try {
+        const src = await getSource(info.sourceId);
+        await selectSource(src); // regenerating 게이트를 우측 스택 폴링이 이어받음
+        setFilter("approval"); // 승인 탭으로 전환해 이동을 눈에 보이게(T-031/T-033 흐름)
+      } catch {
+        // source 조회 실패는 조용히 무시 — 게이트는 승인 탭에서 다시 열 수 있다.
+      }
+    },
+    [regeneratingStale, selectSource],
+  );
+
+  // --- 완료(v2 승인→배지 해제)로 목록에서 사라진 문서의 진행 상태 정리(세션 맵 누수 방지) ---
+  useEffect(() => {
+    setRegeneratingStale((cur) => {
+      const ids = new Set(staleDocs.map((d) => d.document_id));
+      const next = Object.fromEntries(Object.entries(cur).filter(([id]) => ids.has(id)));
+      return Object.keys(next).length === Object.keys(cur).length ? cur : next;
+    });
+  }, [staleDocs]);
 
   return (
     <main className="flex h-[calc(100vh-3.5rem)] w-full flex-col px-6 py-5">
@@ -468,6 +494,7 @@ export function SourceInbox() {
               filter={filter}
               loading={staleLoading}
               error={staleError}
+              regeneratingIds={new Set(Object.keys(regeneratingStale))}
               onSelect={(doc) => setSelectedStaleId(doc.document_id)}
               onFilterChange={setFilter}
               onOpenModal={() => setModalOpen(true)}
@@ -475,8 +502,10 @@ export function SourceInbox() {
             <StaleDetail
               doc={staleDocs.find((d) => d.document_id === selectedStaleId) ?? null}
               busyId={staleBusyId}
+              regenerating={selectedStaleId ? regeneratingStale[selectedStaleId] ?? null : null}
               onDismiss={handleDismissStale}
               onRegenerate={handleRegenerateStale}
+              onOpenGate={openStaleGate}
             />
           </>
         ) : (

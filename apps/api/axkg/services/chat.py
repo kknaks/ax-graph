@@ -130,6 +130,9 @@ class ChatService:
             filters=filters,
             queued_at=now,
         )
+        # run 생성 직후 user 메시지에 run_id를 역참조로 채운다 — FE가 세션 재개 시 응답이
+        # 아직 없는 user 메시지의 run_id로 진행 중 run 폴링을 잇는다 (SPEC-006, T-013).
+        message = await self._chats.set_message_run_id(message.id, run.id) or message
         await self._chats.touch_session(session_id, now)
         # queued run 생성까지가 이 서비스의 책임이다. Graph RAG 실행 트리거는 route가
         # background(`execute_graph_chat`)로 배선한다(T-012). 서비스는 실행 client를

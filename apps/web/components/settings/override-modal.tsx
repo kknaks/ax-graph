@@ -15,7 +15,9 @@ import {
 import { Select } from "@/components/ui/select";
 import { ModelSelect } from "./model-select";
 
-const BOOL_OPTIONS = [
+// resume은 3-상태: "" = 상속(override에 안 넣음) / "true" / "false".
+const RESUME_OPTIONS = [
+  { value: "", label: "상속" },
   { value: "false", label: "false" },
   { value: "true", label: "true" },
 ];
@@ -28,11 +30,25 @@ export interface OverrideDraft {
   edit: boolean;
 }
 
+/** 상속(미설정) 필드 placeholder에 보여줄 전역 기본값(효과값의 FE-가시 부분). */
+export interface OverrideDefaults {
+  timeout_sec?: number | null;
+  max_turns?: number | null;
+}
+
+type ResumeState = "" | "true" | "false";
+
+/** 상속 placeholder 문구 — 전역 기본이 있으면 값과 함께, 없으면 "상속". */
+function inheritHint(value: number | null | undefined): string {
+  return value != null ? `상속 (전역 ${value})` : "상속";
+}
+
 export function OverrideModal({
   open,
   draft,
   provider,
   existingKeys,
+  defaults,
   busy,
   error,
   onClose,
@@ -44,6 +60,8 @@ export function OverrideModal({
   provider: Provider;
   /** 이미 override 가 있는 task_key(추가 모드에서 제외). */
   existingKeys: string[];
+  /** 상속 필드 placeholder용 전역 기본값(선택). */
+  defaults?: OverrideDefaults;
   busy: boolean;
   error: string | null;
   onClose: () => void;
@@ -52,7 +70,7 @@ export function OverrideModal({
   const [taskKey, setTaskKey] = useState("");
   const [model, setModel] = useState<string | null>(null);
   const [timeout, setTimeoutSec] = useState("");
-  const [resume, setResume] = useState(false);
+  const [resume, setResume] = useState<ResumeState>("");
   const [maxTurns, setMaxTurns] = useState("");
   const [effort, setEffort] = useState<Effort | "">("");
   const busyRef = useRef(false);
@@ -68,10 +86,12 @@ export function OverrideModal({
     if (!open || !draft) return;
     const initialKey = draft.edit ? draft.taskKey : draft.taskKey || available[0]?.key || "";
     setTaskKey(initialKey);
+    // 저장돼 있던 키만 값으로, 없던 키는 상속(빈 상태)으로 프리필 — 편집이 미설정 필드를
+    // 효과값으로 굳혀 저장하는 사고를 막는다(PLAN-010-T-014).
     const ov = draft.initial;
     setModel(ov?.model ?? null);
     setTimeoutSec(ov?.options?.timeout_sec != null ? String(ov.options.timeout_sec) : "");
-    setResume(ov?.options?.resume ?? false);
+    setResume(ov?.options?.resume != null ? (ov.options.resume ? "true" : "false") : "");
     setMaxTurns(ov?.provider_options?.max_turns != null ? String(ov.provider_options.max_turns) : "");
     setEffort((ov?.provider_options?.effort as Effort | undefined) ?? "");
   }, [open, draft, available]);
@@ -92,16 +112,20 @@ export function OverrideModal({
 
   function handleSubmit() {
     if (!taskKey) return;
-    // 부분 override 허용 — 비운 필드는 보내지 않는다(BE가 값 있는 필드만 검증).
+    // 사용자가 명시적으로 설정한 필드만 담는다 — 미설정(상속) 필드는 키/래퍼 자체를 제외한다.
+    // resolution `_merge`가 키 단위라 담긴 키만 definition/global을 덮으므로, 이렇게 해야
+    // 안 만진 필드가 definition 값(예: 문서화 timeout 600)을 덮어쓰지 않는다(PLAN-010-T-014).
     const options: Record<string, unknown> = {};
     if (timeout.trim() !== "") options.timeout_sec = Number(timeout);
-    options.resume = resume;
+    if (resume !== "") options.resume = resume === "true";
     const providerOptions: Record<string, unknown> = {};
     if (maxTurns.trim() !== "") providerOptions.max_turns = Number(maxTurns);
     if (effort) providerOptions.effort = effort;
 
-    const value: TaskOverride = { options, provider_options: providerOptions };
+    const value: TaskOverride = {};
     if (model && model.trim() !== "") value.model = model.trim();
+    if (Object.keys(options).length > 0) value.options = options;
+    if (Object.keys(providerOptions).length > 0) value.provider_options = providerOptions;
     onSubmit(taskKey, value);
   }
 
@@ -121,8 +145,8 @@ export function OverrideModal({
             <h3 className="text-sm font-semibold">{draft.edit ? "override 수정" : "override 생성"}</h3>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
               {draft.edit
-                ? "task별 실행 한도를 즉시 갱신합니다."
-                : "등록된 task definition 중 override가 없는 항목을 선택합니다."}
+                ? "설정한 필드만 override로 저장됩니다. 비운 필드는 상속(전역→definition)합니다."
+                : "설정한 필드만 override됩니다. 비운 필드는 상속(전역→definition)합니다."}
             </p>
           </div>
           <button
@@ -195,7 +219,8 @@ export function OverrideModal({
                   value={timeout}
                   onChange={(e) => setTimeoutSec(e.target.value)}
                   disabled={busy}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+                  placeholder={inheritHint(defaults?.timeout_sec)}
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none placeholder:font-sans placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
                 />
               </div>
               <div>
@@ -204,9 +229,9 @@ export function OverrideModal({
                 </span>
                 <div className="mt-1">
                   <Select
-                    value={resume ? "true" : "false"}
-                    onValueChange={(v) => setResume(v === "true")}
-                    options={BOOL_OPTIONS}
+                    value={resume}
+                    onValueChange={(v) => setResume(v as ResumeState)}
+                    options={RESUME_OPTIONS}
                     disabled={busy}
                     ariaLabel="options.resume"
                   />
@@ -222,7 +247,8 @@ export function OverrideModal({
                   value={maxTurns}
                   onChange={(e) => setMaxTurns(e.target.value)}
                   disabled={busy}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+                  placeholder={inheritHint(defaults?.max_turns)}
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none placeholder:font-sans placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
                 />
               </div>
               <div>
@@ -246,6 +272,7 @@ export function OverrideModal({
                     </button>
                   ))}
                 </div>
+                <p className="mt-1 text-[10px] text-muted-foreground">미선택 = 상속 (다시 눌러 해제)</p>
               </div>
             </div>
 
