@@ -37,7 +37,7 @@ env:
   OWNER: kknaks
   # 홈서버 실사 x86_64 확정 (2026-07-10)
   PLATFORM: linux/amd64
-  DEPLOY_DIR: ~/ax-graph
+  DEPLOY_DIR: /home/kknaks/ax-graph  # 절대경로 — $DEPLOY_DIR 안의 ~ 는 셸이 확장 안 함
 
 jobs:
   build-push:
