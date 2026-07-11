@@ -67,6 +67,10 @@ export function SourceInbox() {
   // BE stale 목록 계약엔 게이트 status가 없어(문서→게이트 역참조 불가) 새로고침 시 유실된다(리포트 한계).
   const [regeneratingStale, setRegeneratingStale] = useState<Record<string, StaleRegenInfo>>({});
 
+  // 모바일(<md) 전환형 master-detail 뷰 상태 — "list"=좌 목록 풀폭, "detail"=우 상세 풀폭.
+  // 데스크탑은 항상 2컬럼이라 이 상태를 무시한다(md: 클래스가 우선). 폴링/게이트 상태와 무관한 로컬 UI state.
+  const [mobileView, setMobileView] = useState<"list" | "detail">("list");
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Source | null>(null);
   const selectedIdRef = useRef<string | null>(null);
@@ -187,6 +191,7 @@ export function SourceInbox() {
       setSelectedId(source.id);
       selectedIdRef.current = source.id;
       setSelected(source);
+      setMobileView("detail"); // 모바일: 상세 풀폭 전환 (데스크탑은 무시)
       setGates([]);
       setGatesError(null);
       setRetryError(null);
@@ -200,6 +205,14 @@ export function SourceInbox() {
     },
     [loadGates],
   );
+
+  // 탭(문서함 4탭) 사용자 전환 → 모바일은 항상 목록 뷰로 복귀(상세를 접는다).
+  // 주의: handleClassify/openStaleGate 내부의 programmatic setFilter("approval")는 상세 뷰를
+  // 유지해야(승인 탭으로 이동을 이어감) 하므로 이 핸들러를 거치지 않고 setFilter 를 직접 쓴다.
+  const handleTabChange = useCallback((next: StatusFilter) => {
+    setFilter(next);
+    setMobileView("list");
+  }, []);
 
   // --- generating/regenerating 게이트 폴링 ---
   useEffect(() => {
@@ -477,17 +490,29 @@ export function SourceInbox() {
     });
   }, [staleDocs]);
 
+  // 모바일 백버튼에 곁들일 상세 제목(선택 소스/재검토 문서). 데스크탑에선 미사용.
+  const detailTitle =
+    filter === "review"
+      ? staleDocs.find((d) => d.document_id === selectedStaleId)?.title ?? null
+      : selected?.summary_payload?.title || selected?.source_url || null;
+
   return (
-    <main className="flex h-[calc(100vh-3.5rem)] w-full flex-col px-6 py-5">
+    <main className="flex h-[calc(100dvh-3.5rem)] w-full flex-col px-4 py-4 md:px-6 md:py-5">
       <div className="mb-4 shrink-0">
         <h1 className="text-xl font-semibold tracking-tight">문서함</h1>
       </div>
 
-      {/* 좌: 큐 목록 (300px) / 우: 상세 (1fr) — 21-html 2컬럼. 문서함 높이는 탭 무관 항상 100%(뷰포트 채움).
+      {/* 좌: 큐 목록 (300px) / 우: 상세 (1fr). 데스크탑은 21-html 2컬럼 고정, 모바일(<md)은 단일 컬럼
+          전환형 — mobileView 로 목록↔상세를 전환하고 상세 상단에 "← 목록" 백버튼을 붙인다.
           재검토 탭: 좌 stale 목록 + 우 stale 상세. 그 외: 좌 source 목록 + 우 게이트 스택. */}
-      <div className="grid min-h-0 flex-1 grid-cols-[300px_1fr] gap-4">
-        {filter === "review" ? (
-          <>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 md:grid md:grid-cols-[300px_1fr]">
+        {/* 목록 pane */}
+        <div
+          className={`min-w-0 min-h-0 flex-col md:flex ${
+            mobileView === "detail" ? "hidden" : "flex flex-1"
+          }`}
+        >
+          {filter === "review" ? (
             <StaleList
               items={staleDocs}
               selectedId={selectedStaleId}
@@ -495,21 +520,14 @@ export function SourceInbox() {
               loading={staleLoading}
               error={staleError}
               regeneratingIds={new Set(Object.keys(regeneratingStale))}
-              onSelect={(doc) => setSelectedStaleId(doc.document_id)}
-              onFilterChange={setFilter}
+              onSelect={(doc) => {
+                setSelectedStaleId(doc.document_id);
+                setMobileView("detail");
+              }}
+              onFilterChange={handleTabChange}
               onOpenModal={() => setModalOpen(true)}
             />
-            <StaleDetail
-              doc={staleDocs.find((d) => d.document_id === selectedStaleId) ?? null}
-              busyId={staleBusyId}
-              regenerating={selectedStaleId ? regeneratingStale[selectedStaleId] ?? null : null}
-              onDismiss={handleDismissStale}
-              onRegenerate={handleRegenerateStale}
-              onOpenGate={openStaleGate}
-            />
-          </>
-        ) : (
-          <>
+          ) : (
             <SourceList
               sources={filter === "documented" ? documented : sources}
               selectedId={selectedId}
@@ -518,28 +536,63 @@ export function SourceInbox() {
               loading={filter === "documented" ? documentedLoading : loading}
               error={filter === "documented" ? documentedError : listError}
               onSelect={selectSource}
-              onFilterChange={setFilter}
+              onFilterChange={handleTabChange}
               onOpenModal={() => setModalOpen(true)}
               onRetry={retryCollection}
             />
-            <GateHistoryStack
-              source={selected}
-              gates={gates}
-              gatesLoading={gatesLoading}
-              gatesError={gatesError}
-              classifying={classifying}
-              gateBusyId={gateBusyId}
-              retrying={retrying}
-              retryError={retryError}
-              onSummaryFeedback={openSummaryFeedback}
-              onClassify={handleClassify}
-              onGateFeedback={openGateFeedback}
-              onApproveGate={handleApproveGate}
-              onRetryGate={handleRetryGate}
-              onRetryCollection={retryCollection}
-            />
-          </>
-        )}
+          )}
+        </div>
+
+        {/* 상세 pane */}
+        <div
+          className={`min-w-0 min-h-0 flex-col md:flex ${
+            mobileView === "list" ? "hidden" : "flex flex-1"
+          }`}
+        >
+          {/* 모바일 전용 백버튼 — 목록 뷰로 복귀(폴링/게이트 상태는 유지). 데스크탑은 md:hidden. */}
+          <button
+            type="button"
+            onClick={() => setMobileView("list")}
+            className="mb-2 inline-flex shrink-0 items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-secondary md:hidden"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            목록
+            {detailTitle && (
+              <span className="max-w-[55vw] truncate font-normal text-muted-foreground">· {detailTitle}</span>
+            )}
+          </button>
+          <div className="min-h-0 flex-1">
+            {filter === "review" ? (
+              <StaleDetail
+                doc={staleDocs.find((d) => d.document_id === selectedStaleId) ?? null}
+                busyId={staleBusyId}
+                regenerating={selectedStaleId ? regeneratingStale[selectedStaleId] ?? null : null}
+                onDismiss={handleDismissStale}
+                onRegenerate={handleRegenerateStale}
+                onOpenGate={openStaleGate}
+              />
+            ) : (
+              <GateHistoryStack
+                source={selected}
+                gates={gates}
+                gatesLoading={gatesLoading}
+                gatesError={gatesError}
+                classifying={classifying}
+                gateBusyId={gateBusyId}
+                retrying={retrying}
+                retryError={retryError}
+                onSummaryFeedback={openSummaryFeedback}
+                onClassify={handleClassify}
+                onGateFeedback={openGateFeedback}
+                onApproveGate={handleApproveGate}
+                onRetryGate={handleRetryGate}
+                onRetryCollection={retryCollection}
+              />
+            )}
+          </div>
+        </div>
       </div>
 
       <DirectInboxModal

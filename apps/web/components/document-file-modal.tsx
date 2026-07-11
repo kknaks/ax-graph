@@ -351,7 +351,7 @@ export function DocumentFileModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-0 md:p-4"
       role="dialog"
       aria-modal="true"
       aria-label="파일 보기"
@@ -359,7 +359,7 @@ export function DocumentFileModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+      <div className="flex h-[100dvh] w-full max-w-6xl flex-col overflow-hidden rounded-none border-border bg-background shadow-xl md:h-[85vh] md:rounded-xl md:border">
         {/* 헤더 */}
         <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -399,10 +399,10 @@ export function DocumentFileModal({
           </div>
         </div>
 
-        {/* 본문 + 관련링크 */}
-        <div className="flex min-h-0 flex-1">
+        {/* 본문 + 관련링크. 데스크탑=좌우 2패널(각자 스크롤), 모바일=세로 스택 단일 스크롤 축. */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
           {/* 원문 */}
-          <div className="scroll-thin min-w-0 flex-1 overflow-y-auto px-6 py-4">
+          <div className="scroll-thin min-w-0 px-6 py-4 md:flex-1 md:overflow-y-auto">
             {loading ? (
               <p className="text-xs text-muted-foreground">문서를 불러오는 중…</p>
             ) : error ? (
@@ -420,8 +420,9 @@ export function DocumentFileModal({
             )}
           </div>
 
-          {/* 우측 레일: 로컬 그래프(고정) + 관련링크(스크롤) */}
-          <aside className="flex w-[320px] shrink-0 flex-col border-l border-border bg-secondary/20">
+          {/* 우측 레일: 로컬 그래프 + 관련링크. 데스크탑=좌측 320px 고정 사이드바(자체 스크롤),
+              모바일=본문 아래 세로 스택(부모 단일 스크롤에 실림). */}
+          <aside className="flex w-full shrink-0 flex-col border-t border-border bg-secondary/20 md:w-[320px] md:border-l md:border-t-0">
             <div className="shrink-0 border-b border-border p-3">
               <div className="mb-2 text-xs font-semibold">관련 그래프</div>
               {loading ? (
@@ -437,7 +438,7 @@ export function DocumentFileModal({
                 <p className="text-[11px] text-muted-foreground">이웃 문서가 없습니다.</p>
               )}
             </div>
-            <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 py-4">
+            <div className="scroll-thin px-2 py-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
               <div className="mb-2 px-2 text-xs font-semibold">관련링크</div>
               {loading ? (
                 <p className="px-2 text-[11px] text-muted-foreground">불러오는 중…</p>
