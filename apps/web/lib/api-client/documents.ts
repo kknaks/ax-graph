@@ -111,7 +111,28 @@ export function documentCaseMessage(error: unknown, fallback: string): string {
   return caseMessage(error, fallback);
 }
 
+/** 저장 문서 목록 항목(GET /documents · DocumentListResponse.documents[]).
+ * 목록 응답에는 본문(markdown_full)이 없다(payload 비대 방지 — schemas/documents.py).
+ * 라이브러리 트리는 `path`만으로 구성한다(AXKG-SPEC-013 §4). */
+export interface DocumentListItem {
+  id: string;
+  path: string;
+  stem: string;
+  document_type: string;
+  title: string;
+}
+
+/** 목록 응답 봉투 { documents: [...] } (BE DocumentListResponse). */
+type DocumentListPayload = { documents?: DocumentListItem[] };
+
 // --- API ---
+
+/** GET /documents — 저장 문서 목록(current, `superseded` 기본 제외). 라이브러리 트리 소스.
+ * BE `list_documents`가 인덱스(current)만 반환하므로 FE는 별도 필터를 두지 않는다. */
+export async function listDocuments(): Promise<DocumentListItem[]> {
+  const payload = await apiFetch<DocumentListPayload>("/documents");
+  return payload?.documents ?? [];
+}
 
 /** GET /documents/stale — 영향 가능성(stale) 배지가 붙은 문서 목록. */
 export async function listStaleDocuments(): Promise<StaleDocument[]> {

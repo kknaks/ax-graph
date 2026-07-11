@@ -20,6 +20,7 @@ from axkg.api.routes import (
     approval_gates,
     documentation_gates,
     documents,
+    summaries,
     graph,
     settings,
     prompts,
@@ -116,6 +117,7 @@ _ADMIN_ROUTERS = (
 )
 _AUTHENTICATED_ROUTERS = (
     documents.router,
+    summaries.router,
     graph.router,
 )
 for _router in _ADMIN_ROUTERS:

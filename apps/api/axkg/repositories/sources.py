@@ -328,6 +328,27 @@ class SourceRepository:
         row = await self._session.get(SourceSummaryRevision, revision_id)
         return _to_summary_revision_dto(row) if row is not None else None
 
+    async def list_active_summaries(
+        self,
+    ) -> list[tuple[SourceDTO, SourceSummaryRevisionDTO]]:
+        """active 요약을 가진 source 목록 (문서 라이브러리 요약 브랜치, AXKG-SPEC-013 §4).
+
+        `active_summary_revision_id` 포인터로 active 버전 revision을 조인한다(포인터 체계
+        준수). soft delete된 source는 제외한다. 정렬은 생성 시각 오름차순(안정적 순서).
+        읽기 전용 — active 버전만 읽어 히스토리·요약 파이프라인·그래프/인덱스에 무영향이다.
+        """
+        stmt = (
+            sa.select(Source, SourceSummaryRevision)
+            .join(
+                SourceSummaryRevision,
+                SourceSummaryRevision.id == Source.active_summary_revision_id,
+            )
+            .where(Source.status != "deleted")
+            .order_by(Source.created_at.asc())
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [(_to_dto(src), _to_summary_revision_dto(rev)) for src, rev in rows]
+
     async def list_summary_revisions(
         self, source_id: uuid.UUID
     ) -> list[SourceSummaryRevisionDTO]:

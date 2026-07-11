@@ -51,3 +51,21 @@ class SourceSummaryRevisionDTO(BaseModel):
     ai_task_id: uuid.UUID | None = None
     open_kknaks_session_id: str | None = None
     created_at: datetime
+
+
+class SummaryLibraryItemDTO(BaseModel):
+    """문서 라이브러리 요약 브랜치 목록 항목 (AXKG-SPEC-013 §4).
+
+    서빙 소스는 DB 요약 원본(`sources.summary_payload` active 버전)이다. `path`는 트리
+    합류용 표시 경로 파생값(요약 보관 서비스 stem 파생과 정합) — 실파일 조회 아님.
+    """
+
+    source_id: uuid.UUID
+    name: str
+    path: str
+
+
+class SummaryLibraryDetailDTO(SummaryLibraryItemDTO):
+    """요약 본문 조회 결과 (AXKG-SPEC-013 §4). `markdown_full`은 확정 문서 상세와 동일 필드명."""
+
+    markdown_full: str

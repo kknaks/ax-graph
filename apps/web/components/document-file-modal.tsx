@@ -224,7 +224,7 @@ function DocumentMiniGraph({
 const HEADER_KEYS = new Set(["title", "type", "document_type"]);
 
 /** frontmatter를 본문 위 메타 블록으로 렌더 — tags/aliases/up 등은 chip, 그 외는 key-value. */
-function FrontmatterBlock({ fields }: { fields: FrontmatterField[] }) {
+export function FrontmatterBlock({ fields }: { fields: FrontmatterField[] }) {
   const shown = fields.filter((f) => !HEADER_KEYS.has(f.key));
   if (shown.length === 0) return null;
   return (

@@ -9,7 +9,7 @@ import { logout, type ApiUser, type UserRole } from "@/lib/api-client";
 import { defaultLanding } from "@/lib/access";
 
 // 내비 항목별 최소 role (AXKG-SPEC-008 Access Boundary Matrix).
-// staff = 그래프만. admin = 소스/그래프/설정/유저 관리 전부.
+// staff = 그래프 + 문서 라이브러리(AXKG-SPEC-013). admin = 소스/그래프/문서/설정/유저 관리 전부.
 const NAV_ITEMS: {
   href: string;
   label: string;
@@ -34,6 +34,19 @@ const NAV_ITEMS: {
         <rect x="2" y="16" width="6" height="6" rx="1" />
         <rect x="9" y="2" width="6" height="6" rx="1" />
         <path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8" />
+      </>
+    ),
+  },
+  {
+    href: "/documents",
+    label: "문서",
+    minRole: "staff",
+    icon: (
+      <>
+        <path d="m16 6 4 14" />
+        <path d="M12 6v14" />
+        <path d="M8 8v12" />
+        <path d="M4 4v16" />
       </>
     ),
   },
