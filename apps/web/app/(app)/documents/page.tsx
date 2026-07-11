@@ -6,8 +6,9 @@
 // 읽기 전용: 편집/이동/이름변경/삭제/폴더 생성 등 쓰기 표면·쓰기 API 호출 없음. 이모지 금지.
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/lib/api-client";
+import { extractHeadings } from "@/lib/markdown-headings";
 import { listDocuments, type DocumentListItem } from "@/lib/api-client/documents";
 import { getDocument } from "@/lib/api-client/graph";
 import { getSummary, listSummaries, type SummaryListItem } from "@/lib/api-client/summaries";
@@ -252,6 +253,10 @@ export default function DocumentsPage() {
   // 모바일(<md) 전환형 master-detail — "tree"=트리 풀폭, "body"=본문 풀폭. 데스크탑은 md: 가 우선.
   const [mobileView, setMobileView] = useState<"tree" | "body">("tree");
 
+  // 본문 pane 스크롤 컨테이너 + TOC 현재 섹션 하이라이트(스크롤 연동).
+  const bodyPaneRef = useRef<HTMLDivElement | null>(null);
+  const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+
   // documents + summaries 를 하나의 리프 목록으로 병합 → 한 트리.
   const entries = useMemo<LeafEntry[]>(
     () => [
@@ -349,6 +354,44 @@ export default function DocumentsPage() {
 
   const selectedKey = selected ? leafKey(selected.source, selected.id) : null;
 
+  // 본문 h1~h3 목차. 2개 이상일 때만 노출(1개 이하·없음은 숨김).
+  const headings = useMemo(() => (body ? extractHeadings(body) : []), [body]);
+  const showToc = headings.length >= 2;
+
+  // TOC 클릭 → 본문 pane 내부에서 해당 heading 으로 스크롤.
+  const scrollToHeading = useCallback((id: string) => {
+    const el = bodyPaneRef.current?.querySelector<HTMLElement>(`[id="${id}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActiveHeadingId(id);
+    }
+  }, []);
+
+  // 스크롤 연동 현재 섹션 하이라이트 — pane 상단을 지난 마지막 heading 을 active 로.
+  useEffect(() => {
+    const root = bodyPaneRef.current;
+    if (!root || headings.length < 2) {
+      setActiveHeadingId(null);
+      return;
+    }
+    const els = headings
+      .map((h) => root.querySelector<HTMLElement>(`[id="${h.id}"]`))
+      .filter((el): el is HTMLElement => el !== null);
+    if (els.length === 0) return;
+    const onScroll = () => {
+      const top = root.getBoundingClientRect().top;
+      let current = els[0].id;
+      for (const el of els) {
+        if (el.getBoundingClientRect().top - top <= 24) current = el.id;
+        else break;
+      }
+      setActiveHeadingId(current);
+    };
+    onScroll();
+    root.addEventListener("scroll", onScroll, { passive: true });
+    return () => root.removeEventListener("scroll", onScroll);
+  }, [headings]);
+
   return (
     <main className="flex h-[calc(100dvh-3.5rem)] w-full flex-col px-4 py-4 md:px-6 md:py-5">
       <div className="mb-4 shrink-0">
@@ -416,7 +459,10 @@ export default function DocumentsPage() {
             )}
           </button>
 
-          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-card">
+          <div
+            ref={bodyPaneRef}
+            className="scroll-thin min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-card"
+          >
             {!selected ? (
               <div className="grid h-full min-h-[40vh] place-items-center p-6 text-center">
                 <p className="text-sm text-muted-foreground">
@@ -428,19 +474,60 @@ export default function DocumentsPage() {
             ) : bodyError ? (
               <p className="p-6 text-xs text-destructive">{bodyError}</p>
             ) : body !== null ? (
-              <div className="px-6 py-5">
-                <div className="mb-4 flex items-center gap-2 border-b border-border pb-3">
-                  <h2 className="min-w-0 truncate text-base font-semibold">
-                    {bodyMeta?.title || selected.title || fileLabel(selected.name)}
-                  </h2>
-                  {bodyMeta?.documentType && (
-                    <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                      {bodyMeta.documentType}
-                    </span>
+              // 읽기 폭 제한(article max-w-3xl) + lg 이상에서만 우측 sticky 목차.
+              <div className="px-6 py-6 lg:px-8">
+                <div className="mx-auto flex w-full max-w-6xl justify-center gap-10">
+                  <article className="min-w-0 w-full max-w-3xl">
+                    <div className="mb-4 flex items-center gap-2 border-b border-border pb-3">
+                      <h2 className="min-w-0 truncate text-lg font-semibold tracking-tight">
+                        {bodyMeta?.title || selected.title || fileLabel(selected.name)}
+                      </h2>
+                      {bodyMeta?.documentType && (
+                        <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          {bodyMeta.documentType}
+                        </span>
+                      )}
+                    </div>
+                    {fmFields.length > 0 && <FrontmatterBlock fields={fmFields} />}
+                    <MarkdownView markdown={body} headingIds />
+                  </article>
+
+                  {showToc && (
+                    <aside className="hidden w-[220px] shrink-0 lg:block">
+                      <nav
+                        aria-label="이 문서 목차"
+                        className="scroll-thin sticky top-0 max-h-[calc(100dvh-9rem)] overflow-y-auto"
+                      >
+                        <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          목차
+                        </div>
+                        <ul className="border-l border-border">
+                          {headings.map((h, i) => {
+                            const active = activeHeadingId === h.id;
+                            return (
+                              <li key={`${h.id}-${i}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => scrollToHeading(h.id)}
+                                  title={h.text}
+                                  aria-current={active ? "true" : undefined}
+                                  style={{ paddingLeft: `${(h.depth - 1) * 12 + 12}px` }}
+                                  className={
+                                    active
+                                      ? "-ml-px block w-full truncate border-l-2 border-primary py-1 pr-2 text-left text-xs font-medium text-foreground"
+                                      : "-ml-px block w-full truncate border-l-2 border-transparent py-1 pr-2 text-left text-xs text-muted-foreground hover:text-foreground"
+                                  }
+                                >
+                                  {h.text}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </nav>
+                    </aside>
                   )}
                 </div>
-                {fmFields.length > 0 && <FrontmatterBlock fields={fmFields} />}
-                <MarkdownView markdown={body} />
               </div>
             ) : (
               // 200 이지만 markdown_full 이 null(파일 미존재/접근 불가) — 본문 조회 실패로 안내.
