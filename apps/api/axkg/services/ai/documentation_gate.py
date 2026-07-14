@@ -39,6 +39,7 @@ from axkg.services.document_paths import (
 )
 from axkg.services.documents import DocumentService
 from axkg.services.graph import GraphService
+from axkg.services.qmd import QmdClient
 from axkg.storage.markdown_parser import split_frontmatter
 from axkg.storage.markdown_root import MarkdownRoot
 
@@ -225,14 +226,22 @@ class DocumentationGateContextBuilder(ContextBuilder):
     session 바인딩 handler. 연결 후보 2단 컨텍스트(retriever + index 스냅샷)를 항상 공급한다.
     """
 
-    def __init__(self, session: AsyncSession, *, root: MarkdownRoot | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        root: MarkdownRoot | None = None,
+        qmd: QmdClient | None = None,
+    ) -> None:
         self._sources = SourceRepository(session)
         self._gates = GateRepository(session)
         self._templates = DocumentTemplateRepository(session)
         self._root = root or MarkdownRoot(settings.axkg_markdown_root)
-        self._graph = GraphService(session, root=self._root)
+        self._graph = GraphService(session, root=self._root, qmd=qmd)
         self._documents = DocumentService(session)
         self._doc_repo = DocumentRepository(session)
+        # qmd 사이드카 장애 폴백 관찰 플래그(pipeline이 RETRIEVER_FALLBACK_USED로 수집).
+        self.retriever_fallback_used: bool = False
 
     async def build_data_blocks(
         self, task: AiTaskDTO, definition: AiTaskDefinitionDTO
@@ -441,7 +450,10 @@ class DocumentationGateContextBuilder(ContextBuilder):
             if x
         ) or (payload.get("summary", "") or source.source_url)
         result = await self._graph.retrieve(query, top_n=_RETRIEVER_TOP_N)
+        self.retriever_fallback_used = result.fallback_used
         context = {
+            "retriever_mode": result.retriever_mode,
+            "retriever_fallback_used": result.fallback_used,
             "related_documents": [
                 {
                     "stem": d.stem,

@@ -36,6 +36,7 @@ from axkg.services.ai import (
 from axkg.services.ai.fallbacks import (
     FALLBACK_PROMPT_TEXT,
     PROMPT_FALLBACK_USED,
+    RETRIEVER_FALLBACK_USED,
     TEMPLATE_FALLBACK_USED,
 )
 from axkg.services.ai.pipeline import extract_json_object, strip_code_fences
@@ -440,6 +441,27 @@ async def test_template_fallback_records_and_continues(
         assert done.status == "succeeded"
         assert done.template_version_id is None
         assert TEMPLATE_FALLBACK_USED in done.payload["fallbacks"]
+
+
+async def test_retriever_fallback_recorded_in_payload(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """retriever가 qmd 장애로 폴백하면 RETRIEVER_FALLBACK_USED가 payload에 관찰 기록된다(C-5).
+
+    빌더의 retriever_fallback_used 플래그를 파이프라인이 getattr로 수집하는 배선을 검증한다.
+    """
+    async with session_factory() as session:
+        client = FakeOpenKknaksClient(result_text=json.dumps(VALID_SUMMARY_OUTPUT))
+        dummy = DummyContextBuilder()
+        dummy.retriever_fallback_used = True  # qmd 사이드카 장애 시 빌더가 세우는 플래그
+        service = make_service(session, client, dummy)
+
+        task = await service.create_task("collect_source_summary")
+        done = await service.execute_task(task.id)
+        await session.commit()
+
+        assert done.status == "succeeded"  # 폴백은 실패 아님 — 실행은 계속된다
+        assert RETRIEVER_FALLBACK_USED in done.payload["fallbacks"]
 
 
 # ---------------------------------------------------------------------------

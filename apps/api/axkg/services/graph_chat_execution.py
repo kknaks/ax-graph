@@ -25,6 +25,7 @@ from axkg.models.base import utcnow
 from axkg.repositories.chat import ChatRepository
 from axkg.services.ai import AiExecutionService, ContextBuilderRegistry
 from axkg.services.ai.graph_rag_chat import HANDLER_KIND, GraphRagChatContextBuilder
+from axkg.services.qmd import build_qmd_client
 from axkg.storage.markdown_root import MarkdownRoot
 
 logger = logging.getLogger("axkg.graph_chat_execution")
@@ -55,7 +56,12 @@ async def execute_graph_chat(
         await chats.set_run_status(run_id, "running", started_at=utcnow())
 
         builder = GraphRagChatContextBuilder(
-            session, root=MarkdownRoot(settings.axkg_markdown_root)
+            session,
+            root=MarkdownRoot(settings.axkg_markdown_root),
+            qmd=build_qmd_client(
+                mcp_url=settings.axkg_qmd_mcp_url,
+                rerank_default=settings.axkg_qmd_rerank_default,
+            ),
         )
         registry = ContextBuilderRegistry()
         registry.register(HANDLER_KIND, builder)

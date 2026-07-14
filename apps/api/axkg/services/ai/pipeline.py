@@ -243,6 +243,9 @@ class AiExecutionService:
             return await self._tasks.mark_failed(
                 task_id, error_code=exc.error_code, error_message=exc.message
             )
+        # retriever가 qmd 사이드카 장애로 keyword+edge 폴백했으면 관찰 기록(③④ 공통, C-5).
+        if getattr(builder, "retriever_fallback_used", False):
+            fallback_codes.append(fallbacks.RETRIEVER_FALLBACK_USED)
         assembled = assemble_input(
             prompt_text=prompt_text,
             output_schema=output_schema,

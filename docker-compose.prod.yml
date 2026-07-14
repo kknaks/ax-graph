@@ -52,6 +52,17 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # Graph RAG 2단 retriever 1단 후보 발굴 사이드카 (AXKG-WORK-008 C-1).
+  # 이미지는 deploy-prod.yml이 apps/qmd/Dockerfile로 빌드/push. rerank 기본 off(홈서버 GPU 없음).
+  # ::1 바인딩 우회·증분 재인덱싱은 entrypoint.sh 소관.
+  qmd:
+    image: ghcr.io/kknaks/ax-graph-qmd:${IMAGE_TAG:-latest}
+    container_name: axkg-qmd
+    volumes:
+      - /mnt/data/axkg/documents:/workspace:ro   # api와 같은 Markdown SoT(읽기 전용)
+      - qmd-index:/root/.cache/qmd               # SQLite 인덱스 + 모델 캐시 영속
+    restart: unless-stopped
+
   api:
     image: ghcr.io/kknaks/ax-graph-api:${IMAGE_TAG:-latest}
     container_name: axkg-api
@@ -63,6 +74,10 @@ services:
     env_file:
       - path: .env
         required: false                       # `docker compose config` 가 .env 없이도 파싱되도록
+    environment:
+      # 2단 retriever 사이드카(비우면 keyword+edge 폴백만). rerank 기본 off(홈서버 GPU 없음).
+      AXKG_QMD_MCP_URL: ${AXKG_QMD_MCP_URL:-http://qmd:8181/mcp}
+      AXKG_QMD_RERANK_DEFAULT: ${AXKG_QMD_RERANK_DEFAULT:-false}
     volumes:
       # Markdown SoT root (= AXKG_MARKDOWN_ROOT=/workspace). 지식 문서 전체의 원천 —
       # 유실되면 복구 불가. 서버 HDD(/mnt/data 1.8T)에 bind 영속(사용자 확정 2026-07-10).
@@ -72,6 +87,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qmd:
+        condition: service_started
     healthcheck:
       # 이미지에 curl 미포함(python:3.12-slim) — python urllib 로 /health 확인
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
@@ -108,4 +125,5 @@ volumes:
   postgres-data:
   redis-data:
   axkg-claude-sessions:                       # claude 세션(resume) 영속
+  qmd-index:                                  # qmd SQLite 인덱스 + GGUF 모델 캐시 영속
   # Markdown SoT 는 /mnt/data/axkg/documents 호스트 bind (HDD) — named volume 아님

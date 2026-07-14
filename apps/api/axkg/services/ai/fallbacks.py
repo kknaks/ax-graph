@@ -12,6 +12,8 @@ from typing import Any
 # Case Matrix 관찰 코드 (실패 아님 — payload/로그 기록용)
 PROMPT_FALLBACK_USED = "PROMPT_FALLBACK_USED"
 TEMPLATE_FALLBACK_USED = "TEMPLATE_FALLBACK_USED"
+# qmd 사이드카 장애로 retriever 1단을 keyword+edge로 폴백(품질 강등, ③④ 공통, AXKG-SPEC-011).
+RETRIEVER_FALLBACK_USED = "RETRIEVER_FALLBACK_USED"
 
 FALLBACK_PROMPT_TEXT = (
     "당신은 개인 지식 베이스 파이프라인의 AI 작업자다. 아래에 이어지는 데이터 "

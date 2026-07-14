@@ -19,11 +19,13 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from axkg.config import settings
 from axkg.core.database import get_session_factory
 from axkg.dto.ai import AiTaskDTO
 from axkg.integrations.open_kknaks import OpenKknaksClient
 from axkg.repositories.gates import GateRepository
 from axkg.services.ai import AiExecutionService, ContextBuilderRegistry
+from axkg.services.qmd import build_qmd_client
 from axkg.services.ai.documentation_gate import (
     HANDLER_KIND,
     DocumentationGateContextBuilder,
@@ -46,7 +48,14 @@ async def execute_documentation_gate(
     factory = session_factory or get_session_factory()
     try:
         async with factory() as session:
-            builder = DocumentationGateContextBuilder(session, root=root)
+            builder = DocumentationGateContextBuilder(
+                session,
+                root=root,
+                qmd=build_qmd_client(
+                    mcp_url=settings.axkg_qmd_mcp_url,
+                    rerank_default=settings.axkg_qmd_rerank_default,
+                ),
+            )
             registry = ContextBuilderRegistry()
             registry.register(HANDLER_KIND, builder)
             service = AiExecutionService(session, client=client, registry=registry)

@@ -27,6 +27,7 @@ from axkg.repositories.chat import ChatRepository
 from axkg.repositories.documents import DocumentRepository
 from axkg.services.ai.context import ContextBuilder, ContextBuildError
 from axkg.services.graph import GraphService, RetrievalResult
+from axkg.services.qmd import QmdClient
 from axkg.storage.markdown_root import MarkdownRoot
 
 HANDLER_KIND = "graph_rag_chat"
@@ -46,10 +47,16 @@ class GraphRagChatContextBuilder(ContextBuilder):
     (registry 자체는 앱 수명이 아니라 실행 수명). retriever는 GraphService가 소유한다.
     """
 
-    def __init__(self, session: AsyncSession, *, root: MarkdownRoot | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        root: MarkdownRoot | None = None,
+        qmd: QmdClient | None = None,
+    ) -> None:
         self._chats = ChatRepository(session)
         self._docs = DocumentRepository(session)
-        self._graph = GraphService(session, root=root)
+        self._graph = GraphService(session, root=root, qmd=qmd)
         # 선택 문서 본문 read-through용(documents markdown_full 로딩과 동일 계열). 실행 경로는
         # 실제 root를 주입한다(graph_chat_execution). None(테스트/오프라인)이면 본문 없이 fallback.
         self._root = root
@@ -58,6 +65,8 @@ class GraphRagChatContextBuilder(ContextBuilder):
         self.last_retrieval_context: dict[str, Any] = {}
         self.last_question: str = ""
         self.last_selected_stem: str | None = None
+        # qmd 사이드카 장애 폴백 관찰 플래그(pipeline이 RETRIEVER_FALLBACK_USED로 수집).
+        self.retriever_fallback_used: bool = False
 
     # ------------------------------------------------------------------
     # 입력 블록
@@ -90,6 +99,7 @@ class GraphRagChatContextBuilder(ContextBuilder):
 
         retrieval = await self._graph.retrieve(question, selected_stem=selected_stem)
         self.last_retrieval = retrieval
+        self.retriever_fallback_used = retrieval.fallback_used
         self.last_retrieval_context = self._retrieval_context(retrieval, selected_stem)
 
         blocks: list[AssembledBlockDTO] = [
@@ -299,6 +309,17 @@ class GraphRagChatContextBuilder(ContextBuilder):
                 for doc in retrieval.documents
             ],
             "index_size": len(retrieval.index_snapshot),
+            # 2단 retriever 관찰(AXKG-WORK-008): 폴백 여부·모드·근거 경로.
+            "retriever_mode": retrieval.retriever_mode,
+            "retriever_fallback_used": retrieval.fallback_used,
+            "used_paths": [
+                {"seed_stem": p.seed_stem, "to_stem": p.to_stem, "stems": list(p.stems), "hop": p.hop}
+                for p in retrieval.used_paths
+            ],
+            "evidence_edges": [
+                {"from_stem": e.from_stem, "to_stem": e.to_stem, "edge_type": e.edge_type}
+                for e in retrieval.evidence_edges
+            ],
         }
 
     @staticmethod
