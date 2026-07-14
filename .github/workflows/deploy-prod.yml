@@ -22,6 +22,7 @@ on:
     paths:
       - "apps/api/**"
       - "apps/worker/**"
+      - "apps/qmd/**"
       - "context/**"
       - "docker-compose.prod.yml"
       - ".github/workflows/deploy-prod.yml"
@@ -81,6 +82,21 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.OWNER }}/ax-graph-worker:latest
           cache-from: type=gha,scope=ax-graph-worker
           cache-to: type=gha,scope=ax-graph-worker,mode=max
+
+      # qmd — Graph RAG 1단 후보 발굴 사이드카(WORK-008). context = repo root
+      # (entrypoint.sh 를 apps/qmd/ 경로로 COPY). embed 모델은 이미지에 pre-bake.
+      - name: Build & push qmd
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./apps/qmd/Dockerfile
+          platforms: ${{ env.PLATFORM }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/ax-graph-qmd:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/ax-graph-qmd:latest
+          cache-from: type=gha,scope=ax-graph-qmd
+          cache-to: type=gha,scope=ax-graph-qmd,mode=max
 
   deploy:
     needs: build-push
