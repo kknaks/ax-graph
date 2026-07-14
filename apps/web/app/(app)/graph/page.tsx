@@ -22,14 +22,17 @@ export default function GraphPage() {
   }, []);
 
   return (
-    <main className="flex h-[calc(100vh-3.5rem)] w-full flex-col px-6 py-5">
+    <main className="flex h-[calc(100dvh-3.5rem)] w-full flex-col px-4 py-4 md:px-6 md:py-5">
       <div className="mb-4">
         <h1 className="text-xl font-semibold tracking-tight">Graph Chat</h1>
       </div>
 
-      {/* [graph] | [채팅] split view (SPEC-006 Placement) */}
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_460px] gap-4">
-        <DocumentGraph onSelectNode={setSelectedNode} focusRequest={focusRequest} />
+      {/* [graph] | [채팅] split view (SPEC-006 Placement).
+          모바일(<md): 그래프 숨김 + 채팅 풀폭. 데스크탑: split 무변경 (PLAN-014-T-001). */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-[1fr_460px]">
+        <div className="hidden min-h-0 md:block">
+          <DocumentGraph onSelectNode={setSelectedNode} focusRequest={focusRequest} />
+        </div>
         <GraphChatPanel
           selectedNode={selectedNode}
           onFocusDocument={handleFocusDocument}

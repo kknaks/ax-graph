@@ -29,6 +29,7 @@ import {
 } from "@/lib/api-client/chat";
 import type { GraphSelection } from "@/components/document-graph";
 import { formatTime } from "@/lib/format";
+import { MarkdownView } from "@/components/markdown-view";
 
 // --- 스레드 렌더 모델 (user/assistant/insufficient/error 를 한 목록으로) ---
 type ThreadItem =
@@ -110,8 +111,11 @@ export function GraphChatPanel({
   const [run, setRun] = useState<{ chatId: string; runId: string } | null>(null);
   // 방안 push 상태 (thread item key → PushState). 없으면 idle. WORK-009 U-2.
   const [pushStates, setPushStates] = useState<Record<string, PushState>>({});
+  // 히스토리(세션 목록) 드롭다운 열림 상태 — 세션 목록을 헤더 히스토리 아이콘 뒤로 이동(PLAN-014-T-001).
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // --- 세션 목록 로드 ---
   const refreshSessions = useCallback(async () => {
@@ -131,6 +135,14 @@ export function GraphChatPanel({
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [thread, run]);
+
+  // --- 컴포저 textarea 자동 높이(내용 따라 최대 max-h-32=128px 까지, 이후 내부 스크롤) ---
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  }, [input]);
 
   const appendItem = useCallback((item: ThreadItem) => {
     setThread((prev) => [...prev, item]);
@@ -189,6 +201,7 @@ export function GraphChatPanel({
     setRun(null);
     setInputError(null);
     setPushStates({});
+    setHistoryOpen(false);
   }, []);
 
   // --- run 종료 처리 → 스레드에 결과 append ---
@@ -379,95 +392,128 @@ export function GraphChatPanel({
   const busy = sending || run !== null;
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-sm">
-      {/* 헤더: sparkles + 제목 + 새 채팅 */}
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <svg
-          className="h-4 w-4 text-muted-foreground"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden
-        >
-          <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
-        </svg>
-        <h2 className="text-sm font-semibold">Graph RAG 채팅</h2>
+    <section className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+      {/* 히스토리 드롭다운 백드롭 — 바깥 클릭 시 닫힘 (PLAN-014-T-001) */}
+      {historyOpen && (
         <button
           type="button"
-          onClick={startNewChat}
-          className="ml-auto inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-secondary/60"
-        >
+          aria-hidden
+          tabIndex={-1}
+          onClick={() => setHistoryOpen(false)}
+          className="absolute inset-0 z-10 cursor-default"
+        />
+      )}
+
+      {/* 헤더 한 줄: 좌 sparkles+타이틀 / 우 [히스토리][+ 새 채팅] (PLAN-014-T-001 wireframe) */}
+      <div className="relative z-20">
+        <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-3">
           <svg
-            className="h-3.5 w-3.5"
+            className="h-4 w-4 text-muted-foreground"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
             aria-hidden
           >
-            <path d="M5 12h14M12 5v14" />
+            <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
           </svg>
-          새 채팅
-        </button>
-      </div>
-
-      {/* 세션 목록 + 현재 세션 context (SPEC-006 persistent chat) */}
-      <div className="border-b border-border bg-secondary/20 px-3 py-2">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            내 채팅
-          </span>
-          <span className="font-mono text-[10px] text-muted-foreground">
-            {sessions.length} sessions
-          </span>
+          <h2 className="text-sm font-semibold">Graph RAG 채팅</h2>
+          <div className="ml-auto flex items-center gap-1.5">
+            {/* 히스토리 토글 — lucide history (코드베이스 inline-svg 관례) */}
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((v) => !v)}
+              aria-label="채팅 히스토리"
+              aria-expanded={historyOpen}
+              className={
+                historyOpen
+                  ? "grid h-7 w-7 place-items-center rounded-md border border-ring bg-secondary/60"
+                  : "grid h-7 w-7 place-items-center rounded-md border border-border hover:bg-secondary/60"
+              }
+            >
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M12 7v5l4 2" />
+              </svg>
+            </button>
+            {/* + 새 채팅 — lucide plus */}
+            <button
+              type="button"
+              onClick={startNewChat}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium hover:bg-secondary/60"
+            >
+              <svg
+                className="h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden
+              >
+                <path d="M5 12h14M12 5v14" />
+              </svg>
+              새 채팅
+            </button>
+          </div>
         </div>
-        {sessions.length === 0 ? (
-          <div className="rounded-md border border-dashed border-border bg-background/60 px-2 py-2 text-center text-[11px] text-muted-foreground">
-            아직 채팅이 없습니다. 아래에서 새 질문을 시작해 보세요.
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-1.5">
-            {sessions.map((s) => {
-              const active = s.chat_id === activeChatId;
-              return (
-                <button
-                  key={s.chat_id}
-                  type="button"
-                  onClick={() => void openSession(s.chat_id)}
-                  className={
-                    active
-                      ? "rounded-md border border-ring bg-background px-2 py-1.5 text-left"
-                      : "rounded-md border border-border bg-background/70 px-2 py-1.5 text-left opacity-75 hover:opacity-100"
-                  }
-                >
-                  <div className="truncate text-[11px] font-medium">{s.title}</div>
-                  <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
-                    {s.status}
-                    {s.last_message_at ? ` · ${formatTime(s.last_message_at)}` : ""}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <div className="mt-2 rounded-md border border-border bg-background px-2.5 py-2 text-[10px]">
-          <div className="flex items-center justify-between">
-            <span className="font-medium">현재 세션</span>
-            {selectedNode ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-1.5 py-0.5 font-medium text-secondary-foreground">
-                context · {selectedNode.title}
+
+        {/* 세션 목록: 히스토리 아이콘 뒤로 이동 — 열림 시 헤더 아래 드롭다운(SPEC-006 persistent chat) */}
+        {historyOpen && (
+          <div className="scroll-thin absolute inset-x-0 top-full z-20 max-h-[60vh] overflow-y-auto border-b border-border bg-card p-3 shadow-md">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                내 채팅
               </span>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {sessions.length} sessions
+              </span>
+            </div>
+            {sessions.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border bg-background/60 px-2 py-2 text-center text-[11px] text-muted-foreground">
+                아직 채팅이 없습니다. 아래에서 새 질문을 시작해 보세요.
+              </div>
             ) : (
-              <span className="text-muted-foreground">전체 그래프</span>
+              <div className="space-y-1.5">
+                {sessions.map((s) => {
+                  const active = s.chat_id === activeChatId;
+                  return (
+                    <button
+                      key={s.chat_id}
+                      type="button"
+                      onClick={() => {
+                        void openSession(s.chat_id);
+                        setHistoryOpen(false);
+                      }}
+                      className={
+                        active
+                          ? "block w-full rounded-md border border-ring bg-background px-2.5 py-2 text-left"
+                          : "block w-full rounded-md border border-border bg-background/70 px-2.5 py-2 text-left opacity-75 hover:opacity-100"
+                      }
+                    >
+                      <div className="truncate text-[11px] font-medium">{s.title}</div>
+                      <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+                        {s.status}
+                        {s.last_message_at ? ` · ${formatTime(s.last_message_at)}` : ""}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
-          <div className="mt-1 font-mono text-muted-foreground">
-            {activeChatId ? `chat_id=${activeChatId}` : "새 채팅 (미저장)"}
-          </div>
-        </div>
+        )}
       </div>
 
       {/* 메시지 스레드 */}
@@ -497,7 +543,10 @@ export function GraphChatPanel({
                 <div key={item.key} className="flex justify-start">
                   <div className="max-w-[90%] space-y-2">
                     <div className="rounded-lg rounded-tl-sm border border-border bg-secondary/50 px-3 py-2 text-sm leading-relaxed">
-                      {item.content}
+                      <MarkdownView
+                        markdown={item.content}
+                        className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+                      />
                     </div>
                     {(item.evidenceDocuments.length > 0 ||
                       item.usedPaths.length > 0) && (
@@ -529,7 +578,10 @@ export function GraphChatPanel({
                         background: "hsl(38 92% 50% / 0.08)",
                       }}
                     >
-                      {item.message}
+                      <MarkdownView
+                        markdown={item.message}
+                        className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+                      />
                       {item.missingContext && (
                         <div className="mt-1 text-[12px] text-muted-foreground">
                           부족한 근거 · {item.missingContext}
@@ -578,20 +630,43 @@ export function GraphChatPanel({
         )}
       </div>
 
-      {/* 입력 */}
+      {/* 하단 고정 컴포저: [현재 선택된 문서] 줄(선택 시만) + [텍스트에어리어][전송] (PLAN-014-T-001) */}
       <div className="border-t border-border p-3">
         {inputError && (
           <div className="mb-2 text-[11px] text-destructive">{inputError}</div>
         )}
-        <div className="flex items-center gap-2 rounded-lg border border-input bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-ring/40">
-          <input
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:opacity-50"
+        {selectedNode && (
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <svg
+              className="h-3.5 w-3.5 shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
+              <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+            </svg>
+            <span className="min-w-0 truncate">
+              <span className="font-medium text-foreground">현재 선택된 문서 · </span>
+              {selectedNode.title}
+            </span>
+          </div>
+        )}
+        <div className="flex items-end gap-2 rounded-lg border border-input bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-ring/40">
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            className="scroll-thin max-h-32 flex-1 resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-muted-foreground disabled:opacity-50"
             placeholder="그래프에 대해 질문하기…"
             value={input}
             disabled={busy}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 void submit();
               }
@@ -602,7 +677,7 @@ export function GraphChatPanel({
             onClick={() => void submit()}
             disabled={busy}
             aria-label="질문 보내기"
-            className="grid h-7 w-7 place-items-center rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
             <svg
               className="h-4 w-4"

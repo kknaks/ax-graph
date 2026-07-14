@@ -98,12 +98,12 @@ function inTab(source: Source, filter: StatusFilter): boolean {
   return filter === "approval" ? inGate : !inGate;
 }
 
-/** 수신 채널 문구 (시안: "slack · #ax-links" / "manual"). */
+/** 수신 채널 문구 (시안: "slack · #ax-links" / "manual" / "upload" / "chat"). */
 function channelLabel(source: Source): string {
   if (source.source_channel === "slack") {
     return source.slack_channel ? `slack · ${source.slack_channel}` : "slack";
   }
-  return "manual";
+  return source.source_channel;
 }
 
 export function SourceList({
