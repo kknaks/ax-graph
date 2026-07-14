@@ -10,12 +10,15 @@ class SourceDTO(BaseModel):
     """Source Inbox row 스냅샷 — Data Contract 필드 + metadata/normalized_url."""
 
     id: uuid.UUID
-    source_url: str
-    normalized_url: str
+    # chat·upload channel은 URL이 없어 None (AXKG-SPEC-003 Data Contract).
+    source_url: str | None = None
+    normalized_url: str | None = None
     source_channel: str
     submitted_by: uuid.UUID | None = None
     submitted_at: datetime
     raw_text: str | None = None
+    # source_channel=upload 원본 파일명 (그 외 채널이면 None).
+    original_filename: str | None = None
     status: str
     visible_in_inbox: bool = True
     summary_payload: dict[str, Any] = Field(default_factory=dict)

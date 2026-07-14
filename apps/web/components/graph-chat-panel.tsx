@@ -14,8 +14,10 @@ import {
   chatCaseMessage,
   getChat,
   getRun,
+  isPushAction,
   isTerminalStatus,
   listChats,
+  pushToInbox,
   readEvidenceDocuments,
   readSuggestedActions,
   readUsedPaths,
@@ -37,6 +39,10 @@ type ThreadItem =
       content: string;
       evidenceDocuments: EvidenceDocument[];
       usedPaths: string[];
+      // 방안 답변의 suggested_actions(제시된 방안 push CTA 포함, WORK-009 U-2).
+      suggestedActions: string[];
+      // push provenance(대화 컷오프)용 run. 이력 로드 시 message.run_id.
+      runId: string | null;
     }
   | {
       kind: "insufficient";
@@ -44,11 +50,34 @@ type ThreadItem =
       message: string;
       missingContext: string | null;
       suggestedActions: string[];
+      runId: string | null;
     }
   | { kind: "error"; key: string; message: string };
 
+// --- 방안 push 상태 (WORK-009 U-2 · SPEC-006 §4) — thread item key 별로 추적 ---
+type PushState =
+  | { status: "pushing" }
+  | { status: "done" }
+  | { status: "error"; message: string };
+
+/** push 시점까지의 대화 내용 전부를 raw_text 로 직렬화(방안 포함). error 항목은 제외.
+ * 직렬화 형식은 SPEC-006 §7 OQ — 클라가 role 구분 표기로 조립해 보낸다. */
+function serializeConversation(items: ThreadItem[], uptoKey: string): string {
+  const end = items.findIndex((it) => it.key === uptoKey);
+  const slice = end >= 0 ? items.slice(0, end + 1) : items;
+  const lines: string[] = [];
+  for (const it of slice) {
+    if (it.kind === "user") lines.push(`[사용자]\n${it.content}`);
+    else if (it.kind === "assistant") lines.push(`[AI]\n${it.content}`);
+    else if (it.kind === "insufficient") lines.push(`[AI]\n${it.message}`);
+  }
+  return lines.join("\n\n").trim();
+}
+
 const POLL_INTERVAL_MS = 1500;
 const POLL_MAX_ATTEMPTS = 40; // ~60s 안전 상한. BE Phase 2 미배선 시 무한 폴링 방지.
+// 빈 대화 push 시 문구 (SPEC-006 Case Matrix EMPTY_PUSH_TEXT). 클라 사전 검증에도 사용.
+const CHAT_EMPTY_PUSH_MESSAGE = "인박스에 추가할 내용이 비어 있습니다.";
 
 /** missing_context(Any) → 표시용 문자열. 배열/객체/문자열 모두 tolerate. */
 function missingContextText(value: unknown): string | null {
@@ -79,6 +108,8 @@ export function GraphChatPanel({
   const [inputError, setInputError] = useState<string | null>(null);
   // 폴링 중인 run. null 이면 대기 상태.
   const [run, setRun] = useState<{ chatId: string; runId: string } | null>(null);
+  // 방안 push 상태 (thread item key → PushState). 없으면 idle. WORK-009 U-2.
+  const [pushStates, setPushStates] = useState<Record<string, PushState>>({});
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -109,6 +140,7 @@ export function GraphChatPanel({
   const openSession = useCallback(async (chatId: string) => {
     setRun(null);
     setInputError(null);
+    setPushStates({});
     try {
       const detail = await getChat(chatId);
       setActiveChatId(detail.chat_id);
@@ -120,6 +152,8 @@ export function GraphChatPanel({
             content: m.content,
             evidenceDocuments: readEvidenceDocuments(m.evidence ?? undefined),
             usedPaths: readUsedPaths(m.evidence ?? undefined),
+            suggestedActions: readSuggestedActions(m.evidence ?? undefined),
+            runId: m.run_id ?? null,
           };
         }
         return { kind: "user", key: m.id, content: m.content };
@@ -154,6 +188,7 @@ export function GraphChatPanel({
     setThread([]);
     setRun(null);
     setInputError(null);
+    setPushStates({});
   }, []);
 
   // --- run 종료 처리 → 스레드에 결과 append ---
@@ -191,6 +226,7 @@ export function GraphChatPanel({
             "현재 그래프만으로는 답하기 어렵습니다. 근거 문서가 그래프에 없습니다.",
           missingContext: missingContextText(r.missing_context),
           suggestedActions: suggested,
+          runId: r.run_id ?? null,
         });
       } else {
         appendItem({
@@ -199,6 +235,8 @@ export function GraphChatPanel({
           content: r.answer || "응답 본문이 아직 준비되지 않았습니다.",
           evidenceDocuments: evidence,
           usedPaths: readUsedPaths(r),
+          suggestedActions: suggested,
+          runId: r.run_id ?? null,
         });
       }
       void refreshSessions();
@@ -299,6 +337,44 @@ export function GraphChatPanel({
       setSending(false);
     }
   }, [input, sending, run, selectedNode, activeChatId, appendItem, refreshSessions]);
+
+  // --- 방안 push (WORK-009 U-2) — 해당 답변까지의 대화 전부를 Source Inbox 로 push ---
+  // 인박스 목록/관리 표면은 열지 않는다(admin 전용). 같은 답변 연타는 pushStates 로 막는다.
+  const handlePush = useCallback(
+    async (item: { key: string; runId: string | null }) => {
+      if (!activeChatId) return;
+      const existing = pushStates[item.key];
+      // 중복 push 방지: push 중이거나 이미 완료된 답변은 재요청하지 않는다.
+      if (existing && existing.status !== "error") return;
+
+      const rawText = serializeConversation(thread, item.key);
+      if (!rawText) {
+        setPushStates((prev) => ({
+          ...prev,
+          [item.key]: { status: "error", message: CHAT_EMPTY_PUSH_MESSAGE },
+        }));
+        return;
+      }
+
+      setPushStates((prev) => ({ ...prev, [item.key]: { status: "pushing" } }));
+      try {
+        await pushToInbox(activeChatId, {
+          raw_text: rawText,
+          run_id: item.runId,
+        });
+        setPushStates((prev) => ({ ...prev, [item.key]: { status: "done" } }));
+      } catch (err) {
+        setPushStates((prev) => ({
+          ...prev,
+          [item.key]: {
+            status: "error",
+            message: chatCaseMessage(err, "인박스에 추가하지 못했습니다. 잠시 후 다시 시도해 주세요."),
+          },
+        }));
+      }
+    },
+    [activeChatId, pushStates, thread],
+  );
 
   const busy = sending || run !== null;
 
@@ -431,6 +507,13 @@ export function GraphChatPanel({
                         onFocusDocument={onFocusDocument}
                       />
                     )}
+                    {item.suggestedActions.length > 0 && (
+                      <SuggestedActions
+                        actions={item.suggestedActions}
+                        pushState={pushStates[item.key]}
+                        onPush={() => void handlePush(item)}
+                      />
+                    )}
                   </div>
                 </div>
               );
@@ -454,21 +537,11 @@ export function GraphChatPanel({
                       )}
                     </div>
                     {item.suggestedActions.length > 0 && (
-                      <div className="rounded-lg border border-border bg-card p-3">
-                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          suggested actions
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {item.suggestedActions.map((a, i) => (
-                            <span
-                              key={`${item.key}-act-${i}`}
-                              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium"
-                            >
-                              {a}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
+                      <SuggestedActions
+                        actions={item.suggestedActions}
+                        pushState={pushStates[item.key]}
+                        onPush={() => void handlePush(item)}
+                      />
                     )}
                   </div>
                 </div>
@@ -624,6 +697,74 @@ function EvidenceBlock({
         <div className="mt-2 font-mono text-[10px] text-muted-foreground">
           used path · {usedPaths.join(" → ")}
         </div>
+      )}
+    </div>
+  );
+}
+
+// --- Suggested Actions (SPEC-006 U-2) — 제안 칩 + 방안 push CTA(WORK-009) ---
+// "Source Inbox에 추가" 액션은 push CTA(primary + lucide inbox)로, 나머지는 안내 칩으로 렌더한다.
+// push 중/완료/실패 상태를 CTA 바로 아래에 표면한다. 인박스 목록/관리 표면은 열지 않는다.
+function SuggestedActions({
+  actions,
+  pushState,
+  onPush,
+}: {
+  actions: string[];
+  pushState: PushState | undefined;
+  onPush: () => void;
+}) {
+  const pushLabel = actions.find(isPushAction) ?? null;
+  const otherActions = actions.filter((a) => !isPushAction(a));
+  const pushing = pushState?.status === "pushing";
+  const done = pushState?.status === "done";
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        suggested actions
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {pushLabel && (
+          <button
+            type="button"
+            onClick={onPush}
+            disabled={pushing || done}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
+          >
+            <svg
+              className="h-3.5 w-3.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+              <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+            </svg>
+            {pushing ? "추가 중…" : done ? "추가됨" : pushLabel}
+          </button>
+        )}
+        {otherActions.map((a, i) => (
+          <span
+            key={`act-${i}`}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium"
+          >
+            {a}
+          </span>
+        ))}
+      </div>
+      {/* push 상태 표면 (U-2 push 중·완료·실패) */}
+      {done && (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Source Inbox에 추가했습니다.
+        </p>
+      )}
+      {pushState?.status === "error" && (
+        <p className="mt-2 text-[11px] text-destructive">{pushState.message}</p>
       )}
     </div>
   );

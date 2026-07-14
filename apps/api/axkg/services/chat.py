@@ -19,6 +19,26 @@ from axkg.services.documents import DocumentNotFoundError, DocumentService
 # 세션 제목은 첫 질문 앞부분을 잘라 만든다(사용자 지정 제목은 이후 개선 항목).
 MAX_TITLE_LENGTH = 80
 
+# 대화 push 직렬화 role 라벨 (AXKG-SPEC-006 §7 OQ 확정: 서버 조립 + role heading 형식).
+# 요약①(LLM)이 raw_text로 소비하므로 role 구분이 명확한 markdown heading으로 박제한다.
+_PUSH_ROLE_LABELS = {"user": "User", "assistant": "Assistant", "system": "System"}
+
+
+def serialize_conversation(messages: list[ChatMessageDTO]) -> str:
+    """채팅 대화 이력을 push용 raw_text로 직렬화한다 (AXKG-SPEC-006 §7 OQ 확정).
+
+    각 메시지를 ``## {Role}\\n{content}`` 블록으로, 블록 사이는 빈 줄로 구분한다. 빈/공백
+    content 메시지는 건너뛴다(잡음 제거). role 라벨은 User/Assistant/System로 고정한다.
+    """
+    blocks: list[str] = []
+    for message in messages:
+        content = (message.content or "").strip()
+        if not content:
+            continue
+        label = _PUSH_ROLE_LABELS.get(message.role, message.role)
+        blocks.append(f"## {label}\n{content}")
+    return "\n\n".join(blocks)
+
 
 class EmptyQuestionError(Exception):
     """빈/공백 질문 (Case Matrix: EMPTY_QUESTION)."""
@@ -171,6 +191,46 @@ class ChatService:
         if run.assistant_message_id is not None:
             assistant_message = await self._chats.get_message(run.assistant_message_id)
         return run, assistant_message
+
+    # ------------------------------------------------------------------
+    # 방안 push — 대화 조립 (AXKG-SPEC-006 S-4, WORK-009)
+    # ------------------------------------------------------------------
+
+    async def assemble_conversation_for_push(
+        self,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        *,
+        cutoff_run_id: uuid.UUID | None = None,
+    ) -> str:
+        """push 시점까지의 대화 내용 전부를 서버가 조립해 raw_text로 돌려준다 (S-4).
+
+        조립 위치는 **서버**로 확정한다(AXKG-SPEC-006 §7 OQ) — 채팅 이력의 SoT가 서버이므로
+        클라이언트 직렬화를 신뢰하지 않고 서버가 `session_id`로 대화를 authoritative하게 조립한다.
+        owner 스코프를 강제한다(타인/삭제 세션은 404). `cutoff_run_id`가 주어지면 그 run의
+        응답(assistant, 없으면 user)까지를 컷오프로 삼아 "push 시점까지"를 경계 짓는다.
+        run_id가 없으면 세션의 모든 메시지를 담는다.
+        """
+        await self._require_session(user_id, session_id)
+        messages = await self._chats.list_messages(session_id)
+        if cutoff_run_id is not None:
+            cutoff_seq = await self._resolve_cutoff_sequence(session_id, cutoff_run_id)
+            if cutoff_seq is not None:
+                messages = [m for m in messages if m.sequence_no <= cutoff_seq]
+        return serialize_conversation(messages)
+
+    async def _resolve_cutoff_sequence(
+        self, session_id: uuid.UUID, run_id: uuid.UUID
+    ) -> int | None:
+        """push 컷오프 run의 마지막 메시지 sequence_no — assistant 응답(없으면 user 질문) 기준."""
+        run = await self._chats.get_run(session_id, run_id)
+        if run is None:
+            return None
+        target_id = run.assistant_message_id or run.user_message_id
+        if target_id is None:
+            return None
+        message = await self._chats.get_message(target_id)
+        return message.sequence_no if message is not None else None
 
     # ------------------------------------------------------------------
     # 검증 helper

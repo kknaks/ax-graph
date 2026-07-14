@@ -27,7 +27,8 @@ export type SourceStatus =
   | "archived"
   | "deleted";
 
-export type SourceChannel = "slack" | "manual";
+// chat = 채팅④ 방안 push(WORK-009), upload = md 파일 업로드(WORK-010). 둘 다 source_url 없음.
+export type SourceChannel = "slack" | "manual" | "chat" | "upload";
 
 /** PARA destination (분류 게이트 form.destination_type, SPEC-001 U-3). */
 export type DestinationType = "project" | "area" | "resource" | "archive";
@@ -147,6 +148,8 @@ export const SOURCE_CASE_MESSAGES: Record<string, string> = {
   DUPLICATE_SOURCE: "이미 받은 URL입니다. 기존 항목에 연결했습니다.",
   SLACK_METADATA_MISSING: "Slack 메시지 정보를 일부 저장하지 못했습니다.",
   MANUAL_NOTE_TOO_LONG: "메모는 2000자 이하로 입력해 주세요.",
+  // md 업로드 intake (SPEC-003 §4 Case Matrix · WORK-010). .md 아닌 파일 거부.
+  UNSUPPORTED_UPLOAD_TYPE: "md 파일만 업로드할 수 있습니다.",
   COLLECTION_RETRY_NOT_ALLOWED: "현재 상태에서는 요약을 재시도할 수 없습니다.",
   // 요약 피드백 / 분류 게이트 진입 (T-015 개정본 · BE T-016 병렬). 최종 코드는 BE 구현과 정합, 없으면 fallback.
   SUMMARY_FEEDBACK_NOT_ALLOWED: "요약이 완료된 항목에만 피드백할 수 있습니다.",
@@ -206,6 +209,24 @@ export function createManualSource(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/** v1 업로드 허용 확장자 (SPEC-003 Validation · WORK-010). */
+export const UPLOAD_ACCEPT_EXT = ".md";
+
+/** 클라 사전 검증 — 확장자가 `.md`인지(대소문자 무시). 서버도 UNSUPPORTED_UPLOAD_TYPE 로 방어. */
+export function isSupportedUploadFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(UPLOAD_ACCEPT_EXT);
+}
+
+/** POST /sources/upload — md 파일 업로드 → source_channel=upload source 를 received 로 저장 (U-3 · WORK-010).
+ * multipart/form-data(file). v1은 `.md`만 허용하고 그 외는 서버가 UNSUPPORTED_UPLOAD_TYPE(422)로 거부한다.
+ * 업로드 md 본문 자체가 원문이 되어 URL 수집 없이 곧 요약 입력이 된다(fallback 아님).
+ * endpoint/필드명 최종 형태는 BE 구현과 정합(SPEC-003 §7 OQ). */
+export function createUploadSource(file: File): Promise<Source> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetch<Source>("/sources/upload", { method: "POST", body: form });
 }
 
 /** GET /sources?status= — Source Inbox 목록 (U-1). status 미지정 시 기본(visible) 목록. */

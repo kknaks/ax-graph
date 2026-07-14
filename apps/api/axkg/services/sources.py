@@ -28,6 +28,11 @@ from axkg.services.ai.resolution import resolve_execution_config
 SUMMARY_TASK_TYPE = "collect_source_summary"
 AI_PROVIDER_SETTINGS_KEY = "ai_provider"
 MAX_MANUAL_NOTE_LENGTH = 2000
+# md 업로드 v1 허용 확장자 (AXKG-SPEC-003 §4 Validation, WORK-010).
+UPLOAD_ALLOWED_EXTENSION = ".md"
+# 업로드 파일 크기 상한 — 구현 기본값(AXKG-SPEC-003 §7 OQ). 1 MiB.
+# md는 텍스트라 1 MiB면 장문 노트/아티클도 충분하고, 요약 입력·메모리·남용을 유계로 둔다.
+MAX_UPLOAD_SIZE_BYTES = 1 * 1024 * 1024
 
 # 중복 재수신 시 기존 source에 이벤트를 연결(누적)할 수 있는 상태 (documented 전).
 _LINKABLE_STATUSES = ("received", "summarizing", "summarized", "collection_failed")
@@ -73,6 +78,22 @@ class EmptyFeedbackError(Exception):
     def __init__(self, source_id: uuid.UUID) -> None:
         super().__init__(f"empty summary feedback: source {source_id}")
         self.source_id = source_id
+
+
+class EmptyPushTextError(Exception):
+    """빈/공백 chat push 대화 내용 (AXKG-SPEC-006 Case Matrix: EMPTY_PUSH_TEXT)."""
+
+
+class UnsupportedUploadTypeError(Exception):
+    """업로드 파일이 v1 허용(.md) 형식이 아님 (AXKG-SPEC-003 Case Matrix: UNSUPPORTED_UPLOAD_TYPE)."""
+
+
+class UploadTooLargeError(Exception):
+    """업로드 파일이 크기 상한 초과 (AXKG-SPEC-003 §7 OQ 구현 기본값)."""
+
+
+class EmptyUploadTextError(Exception):
+    """업로드 md 본문이 비어 있음 (AXKG-SPEC-003 §4 Validation: upload raw_text 필수)."""
 
 
 class ManualSourceResult:
@@ -237,6 +258,82 @@ class SourceService:
             },
         )
         return ManualSourceResult(created)
+
+    async def create_chat_push(
+        self,
+        *,
+        raw_text: str,
+        submitted_by: uuid.UUID | None,
+        chat_id: uuid.UUID,
+        run_id: uuid.UUID | None,
+    ) -> SourceDTO:
+        """채팅④ 방안 push 수신 (S-4) — `source_channel=chat` source를 received로 생성한다.
+
+        push 시점까지의 대화 내용 전부(방안 포함)를 `raw_text`로 받는다. URL이 없으므로
+        `source_url`·`normalized_url`은 null이고(중복 판정 대상 아님), 요약 파이프라인에서
+        이 대화 내용이 곧 요약 입력이 된다(AXKG-SPEC-012 User Note Fallback 경로 재사용).
+        push를 만든 chat/run을 provenance로 metadata에 남긴다. 대화 직렬화(형식·조립 위치)는
+        호출부(chat 표면)가 소유한다 — 이 서비스는 이미 조립된 텍스트를 받는다.
+
+        빈/공백 대화는 `EmptyPushTextError`로 거부한다(trim 후 non-empty, AXKG-SPEC-003 §4).
+        중복 병합은 하지 않는다 — chat source는 URL이 없어 normalized_url 중복 판정에 들지 않는다.
+        """
+        text = (raw_text or "").strip()
+        if not text:
+            raise EmptyPushTextError
+        provenance: dict[str, Any] = {"chat_id": str(chat_id)}
+        if run_id is not None:
+            provenance["run_id"] = str(run_id)
+        return await self._sources.create(
+            source_url=None,
+            normalized_url=None,
+            source_channel="chat",
+            submitted_by=submitted_by,
+            submitted_at=utcnow(),
+            raw_text=text,
+            metadata={"chat_push": provenance},
+        )
+
+    async def create_upload(
+        self,
+        *,
+        filename: str | None,
+        content: bytes,
+        submitted_by: uuid.UUID | None,
+    ) -> SourceDTO:
+        """md 파일 업로드 intake (S-5) — `source_channel=upload` source를 received로 생성한다.
+
+        v1은 확장자 `.md`만 허용한다. 그 외 확장자/디코딩 불가(텍스트 아님)는
+        `UnsupportedUploadTypeError`로 거부하고 **source row를 만들지 않는다**(intake validation,
+        수집 실패와 무관 — SPEC-012 adapter 경로를 타지 않는다). 크기 상한 초과는
+        `UploadTooLargeError`, 본문이 비면 `EmptyUploadTextError`(SPEC-003 §4 upload raw_text 필수).
+
+        업로드 md 본문 자체가 원문이므로 URL 수집 없이 `raw_text`가 곧 요약 입력이 된다
+        (fallback 아님·원문 그 자체). **md frontmatter는 strip하지 않고 본문 그대로 보존한다**
+        (구현 기본값, SPEC-003 §7 OQ): intake를 무손실·무파서로 유지하고, frontmatter의
+        메타(제목/태그 등)도 요약①이 함께 정제하게 둔다. BOM만 제거한다.
+        """
+        name = (filename or "").strip()
+        if not name.lower().endswith(UPLOAD_ALLOWED_EXTENSION):
+            raise UnsupportedUploadTypeError
+        if len(content) > MAX_UPLOAD_SIZE_BYTES:
+            raise UploadTooLargeError
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            # 텍스트로 디코딩되지 않으면 .md 확장자여도 유효한 md가 아니다.
+            raise UnsupportedUploadTypeError from exc
+        if not text.strip():
+            raise EmptyUploadTextError
+        return await self._sources.create(
+            source_url=None,
+            normalized_url=None,
+            source_channel="upload",
+            submitted_by=submitted_by,
+            submitted_at=utcnow(),
+            raw_text=text,
+            original_filename=name,
+        )
 
     async def _handle_duplicate(
         self,

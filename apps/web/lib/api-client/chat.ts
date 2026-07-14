@@ -130,12 +130,30 @@ export interface ChatAskRequest {
   filters?: Record<string, unknown>;
 }
 
+/** POST /graph/chats/{chat_id}/push-to-inbox 요청 (SPEC-006 §4 · WORK-009 C-1/C-2).
+ * `raw_text` = push 시점까지의 채팅 대화 내용 전부(user·assistant, 제시된 방안 포함)를 직렬화한 것.
+ * 직렬화 형식·조립 위치(클라 vs 서버 chat_id 조립)는 SPEC-006 §7 OQ — 여기선 클라가 직렬화해 보낸다. */
+export interface PushToInboxRequest {
+  raw_text: string;
+  /** push 시점(대화 컷오프)을 가리키는 run — provenance 기록용(optional). */
+  run_id?: string | null;
+}
+
+/** POST /graph/chats/{chat_id}/push-to-inbox 응답 — 생성된 source_channel=chat source. */
+export interface PushToInboxResponse {
+  source_id: string;
+  /** 생성된 source 상태(`received`). */
+  status: string;
+}
+
 // --- Case Matrix (SPEC-006 §4) — error_code → 프론트 문구 ---
 export const CHAT_CASE_MESSAGES: Record<string, string> = {
   EMPTY_QUESTION: "질문을 입력해 주세요.",
   NODE_NOT_FOUND: "선택한 문서를 찾지 못했습니다.",
   CHAT_SESSION_NOT_FOUND: "채팅을 찾을 수 없습니다. 목록을 새로고침해 주세요.",
   INSUFFICIENT_GRAPH_CONTEXT: "현재 그래프만으로 답하기 어렵습니다.",
+  // 방안 push (SPEC-006 §4 Case Matrix) — push할 대화 내용이 비어 있음.
+  EMPTY_PUSH_TEXT: "인박스에 추가할 내용이 비어 있습니다.",
 };
 
 export function chatCaseMessage(error: unknown, fallback: string): string {
@@ -182,6 +200,26 @@ export function getRun(chatId: string, runId: string): Promise<ChatRun> {
   return apiFetch<ChatRun>(
     `/graph/chats/${encodeURIComponent(chatId)}/runs/${encodeURIComponent(runId)}`,
   );
+}
+
+/** POST /graph/chats/{chat_id}/push-to-inbox — 제시된 방안을 Source Inbox로 push (WORK-009).
+ * push 대상은 이 채팅의 대화 내용 전부(방안 포함)이며, source_channel=chat source 1건이 received 로 생성된다.
+ * 권한은 staff·admin 단일 쓰기 액션 — 이후 인박스 목록/관리 표면 접근은 부여하지 않는다(SPEC-006 §4).
+ * 빈 대화면 EMPTY_PUSH_TEXT(422). endpoint 최종 형태는 BE 구현과 정합(SPEC-006 §7 OQ). */
+export function pushToInbox(
+  chatId: string,
+  body: PushToInboxRequest,
+): Promise<PushToInboxResponse> {
+  return apiFetch<PushToInboxResponse>(
+    `/graph/chats/${encodeURIComponent(chatId)}/push-to-inbox`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+}
+
+/** suggested_actions 중 "Source Inbox에 추가" push 액션인지 판별(라벨 문구 변주 tolerate). */
+export function isPushAction(action: string): boolean {
+  const a = action.replace(/\s+/g, "");
+  return (a.includes("SourceInbox") || a.includes("인박스")) && a.includes("추가");
 }
 
 // --- evidence 방어적 파서 (BE 키 미확정 → 흔한 키를 모두 tolerate) ---

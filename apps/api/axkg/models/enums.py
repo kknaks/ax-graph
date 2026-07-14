@@ -10,7 +10,7 @@ SOURCE_STATUS = (
     "archived",
     "deleted",
 )
-SOURCE_CHANNEL = ("slack", "manual")
+SOURCE_CHANNEL = ("slack", "manual", "chat", "upload")
 DESTINATION_TYPE = ("project", "area", "resource", "archive")
 GATE_KIND = ("classification", "documentation")
 APPROVAL_GATE_STATUS = (

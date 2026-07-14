@@ -23,13 +23,15 @@ class SourceResponse(BaseModel):
     """
 
     id: uuid.UUID
-    source_url: str
-    normalized_url: str
+    # chat·upload channel은 URL이 없어 null (AXKG-SPEC-003 Data Contract).
+    source_url: str | None = None
+    normalized_url: str | None = None
     source_channel: str
     submitted_by: uuid.UUID | None = None
     submitted_at: datetime
     slack_message_ts: str | None = None
     raw_text: str | None = None
+    original_filename: str | None = None
     status: str
     visible_in_inbox: bool
     summary_payload: dict[str, Any] = Field(default_factory=dict)
@@ -62,6 +64,7 @@ class SourceResponse(BaseModel):
             submitted_at=dto.submitted_at,
             slack_message_ts=dto.slack_message_ts,
             raw_text=dto.raw_text,
+            original_filename=dto.original_filename,
             status=dto.status,
             visible_in_inbox=dto.visible_in_inbox,
             summary_payload=dto.summary_payload,

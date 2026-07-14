@@ -96,7 +96,12 @@ export async function apiFetch<T>(
   const { auth = true, redirectOn401 = true, ...init } = options;
 
   const headers = new Headers(init.headers);
-  if (init.body != null && !headers.has("Content-Type")) {
+  // FormData(멀티파트 업로드)는 브라우저가 boundary 포함 Content-Type을 직접 설정해야 하므로 건드리지 않는다.
+  if (
+    init.body != null &&
+    !(init.body instanceof FormData) &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
   if (auth) {

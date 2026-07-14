@@ -30,12 +30,17 @@ class Source(Base):
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    source_url: Mapped[str] = mapped_column(sa.Text(), nullable=False)
-    normalized_url: Mapped[str] = mapped_column(sa.Text(), nullable=False)
+    # chat(대화 push)·upload(md 업로드) source는 URL이 없어 null이다 (AXKG-SPEC-003
+    # Data Contract, WORK-009/010). slack/manual은 항상 값이 있다.
+    source_url: Mapped[str | None] = mapped_column(sa.Text())
+    normalized_url: Mapped[str | None] = mapped_column(sa.Text())
     source_channel: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     submitted_by: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(), sa.ForeignKey("users.id"))
     submitted_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
     raw_text: Mapped[str | None] = mapped_column(sa.Text())
+    # source_channel=upload의 업로드 원본 파일명 보존. 다른 채널이면 null (AXKG-SPEC-003
+    # Data Contract, WORK-010).
+    original_filename: Mapped[str | None] = mapped_column(sa.Text())
     status: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     visible_in_inbox: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, default=True)
     summary_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)

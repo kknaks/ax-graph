@@ -13,7 +13,16 @@
 """
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,11 +50,14 @@ from axkg.services.gates import (
 from axkg.services.sources import (
     CollectionRetryNotAllowedError,
     EmptyFeedbackError,
+    EmptyUploadTextError,
     InvalidUrlError,
     ManualNoteTooLongError,
     SourceNotFoundError,
     SummaryFeedbackNotAllowedError,
     SourceService,
+    UnsupportedUploadTypeError,
+    UploadTooLargeError,
 )
 from axkg.services.summary_execution import execute_source_summary
 
@@ -120,6 +132,52 @@ async def create_manual(
             execute_source_summary,
             triggered.ai_task.id,
             result.source.id,
+            client=client,
+            session_factory=_summary_session_factory(request),
+        )
+    return SourceResponse.from_dto(source_dto)
+
+
+@router.post("/upload", response_model=SourceResponse, status_code=201)
+async def create_upload(
+    request: Request,
+    background: BackgroundTasks,
+    file: UploadFile = File(...),
+    user: UserDTO = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SourceResponse:
+    """md 파일 업로드 intake → `source_channel=upload` source를 received로 저장 (S-5, WORK-010).
+
+    admin 전용(sources 라우터가 `require_admin`으로 등록 — 기존 인박스 표면 경계 그대로,
+    `/sources/manual`과 동일 authz 수준). multipart `file`, v1은 `.md`만 허용하고 그 외는
+    `UNSUPPORTED_UPLOAD_TYPE`(422)로 source 미생성 거부한다. 업로드 md 본문 자체가 원문이라
+    URL 수집 없이 곧 요약 입력이 되어(fallback 아님) manual과 동일하게 요약 파이프라인에 합류한다.
+    """
+    service = SourceService(session)
+    content = await file.read()
+    try:
+        source_dto = await service.create_upload(
+            filename=file.filename,
+            content=content,
+            submitted_by=user.id,
+        )
+    except UnsupportedUploadTypeError:
+        raise _error(422, "UNSUPPORTED_UPLOAD_TYPE", "md 파일만 업로드할 수 있습니다.")
+    except UploadTooLargeError:
+        raise _error(413, "UPLOAD_TOO_LARGE", "업로드 파일이 너무 큽니다(최대 1MB).")
+    except EmptyUploadTextError:
+        raise _error(422, "EMPTY_UPLOAD_TEXT", "업로드한 md 파일이 비어 있습니다.")
+
+    # SPEC-003 S-5: received → 자동 요약 트리거(파이프라인 합류). create_manual과 동일 배선.
+    client = _open_kknaks_client(request)
+    if client is not None:
+        triggered = await service.start_summary(source_dto.id)
+        source_dto = triggered.source
+        await session.commit()
+        background.add_task(
+            execute_source_summary,
+            triggered.ai_task.id,
+            source_dto.id,
             client=client,
             session_factory=_summary_session_factory(request),
         )

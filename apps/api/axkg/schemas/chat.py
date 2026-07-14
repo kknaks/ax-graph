@@ -41,6 +41,26 @@ class ChatMessageRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ChatPushRequest(BaseModel):
+    """POST /graph/chats/{chat_id}/push-to-inbox (AXKG-SPEC-006 §4).
+
+    조립 위치 확정: **서버 조립**(§7 OQ). 대화 raw_text는 서버가 `chat_id`로 조립하므로
+    request는 `raw_text`를 요구하지 않는다 — SPEC §4의 raw_text(required) 항목은
+    클라이언트 직렬화 안을 기준으로 한 것이고, 서버 조립으로 확정하면서 optional로 정리한다
+    (전달돼도 무시하고 서버 조립본을 authoritative로 쓴다). `run_id`는 push 컷오프 + provenance.
+    """
+
+    run_id: uuid.UUID | None = None
+    raw_text: str | None = None
+
+
+class ChatPushResponse(BaseModel):
+    """생성된 `source_channel=chat` source (AXKG-SPEC-006 §4 Response)."""
+
+    source_id: uuid.UUID
+    status: str
+
+
 class ChatStartResponse(BaseModel):
     chat_id: uuid.UUID
     run_id: uuid.UUID

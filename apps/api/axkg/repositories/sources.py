@@ -30,6 +30,7 @@ def _to_dto(row: Source) -> SourceDTO:
         submitted_by=row.submitted_by,
         submitted_at=row.submitted_at,
         raw_text=row.raw_text,
+        original_filename=row.original_filename,
         status=row.status,
         visible_in_inbox=row.visible_in_inbox,
         summary_payload=row.summary_payload or {},
@@ -68,13 +69,14 @@ class SourceRepository:
     async def create(
         self,
         *,
-        source_url: str,
-        normalized_url: str,
+        source_url: str | None,
+        normalized_url: str | None,
         source_channel: str,
         submitted_by: uuid.UUID | None,
         submitted_at: datetime,
         raw_text: str | None,
         status: str = "received",
+        original_filename: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> SourceDTO:
         row = Source(
@@ -84,6 +86,7 @@ class SourceRepository:
             submitted_by=submitted_by,
             submitted_at=submitted_at,
             raw_text=raw_text,
+            original_filename=original_filename,
             status=status,
             visible_in_inbox=status not in _HIDDEN_STATUSES,
             metadata_=metadata or {},

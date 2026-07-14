@@ -27,6 +27,8 @@ from axkg.schemas.chat import (
     ChatDetailResponse,
     ChatMessageRequest,
     ChatMessageResponse,
+    ChatPushRequest,
+    ChatPushResponse,
     ChatRunResponse,
     ChatSessionListResponse,
     ChatSessionSummary,
@@ -48,6 +50,8 @@ from axkg.services.chat import (
 from axkg.services.documents import DocumentNotFoundError, DocumentService
 from axkg.services.graph import GraphService
 from axkg.services.graph_chat_execution import execute_graph_chat
+from axkg.services.sources import EmptyPushTextError, SourceService
+from axkg.services.summary_execution import execute_source_summary
 from axkg.storage.markdown_root import MarkdownRoot
 
 router = APIRouter(prefix="/graph", tags=["graph"])
@@ -272,3 +276,60 @@ async def get_chat_run(
     except ChatSessionNotFoundError:
         raise _chat_session_not_found(chat_id)
     return ChatRunResponse.from_dto(run, assistant_message=assistant_message)
+
+
+@router.post(
+    "/chats/{chat_id}/push-to-inbox", response_model=ChatPushResponse, status_code=201
+)
+async def push_chat_to_inbox(
+    chat_id: uuid.UUID,
+    request: Request,
+    background: BackgroundTasks,
+    body: ChatPushRequest | None = None,
+    user: UserDTO = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ChatPushResponse:
+    """제시된 방안을 Source Inbox로 push한다 (AXKG-SPEC-006 S-4·§4, WORK-009 C-1~C-4).
+
+    권한: staff·admin 모두 허용하는 **단일 쓰기 액션**이다(그래프 라우터는
+    `get_current_auth`로 등록 — 인박스 표면의 admin 가드와 별개, AXKG-SPEC-008 경계). 본인
+    소유 chat만(owner 스코프 → 404). push 시점까지의 대화 내용 전부(방안 포함)를 **서버가
+    조립**해(§7 OQ 확정) `source_channel=chat` source를 `received`로 만들고, manual과 동일하게
+    요약 파이프라인에 합류시킨다(open-kknaks 구성 시 자동 요약 트리거). 빈 대화는
+    `EMPTY_PUSH_TEXT`(422). run_id는 push 컷오프 + provenance다.
+    """
+    run_id = body.run_id if body else None
+    chat_service = ChatService(session)
+    try:
+        raw_text = await chat_service.assemble_conversation_for_push(
+            user.id, chat_id, cutoff_run_id=run_id
+        )
+    except ChatSessionNotFoundError:
+        raise _chat_session_not_found(chat_id)
+
+    source_service = SourceService(session)
+    try:
+        source = await source_service.create_chat_push(
+            raw_text=raw_text,
+            submitted_by=user.id,
+            chat_id=chat_id,
+            run_id=run_id,
+        )
+    except EmptyPushTextError:
+        raise _error(422, "EMPTY_PUSH_TEXT", "인박스에 추가할 내용이 비어 있습니다.")
+
+    # AXKG-SPEC-003 S-4: received → 자동 요약 트리거(파이프라인 합류). sources.create_manual과
+    # 동일 배선 — background는 yield-teardown 커밋보다 먼저 실행되므로 명시적으로 커밋한다.
+    client = _open_kknaks_client(request)
+    if client is not None:
+        triggered = await source_service.start_summary(source.id)
+        source = triggered.source
+        await session.commit()
+        background.add_task(
+            execute_source_summary,
+            triggered.ai_task.id,
+            source.id,
+            client=client,
+            session_factory=_chat_session_factory(request),
+        )
+    return ChatPushResponse(source_id=source.id, status=source.status)
