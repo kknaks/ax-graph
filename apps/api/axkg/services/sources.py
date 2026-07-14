@@ -428,7 +428,11 @@ class SourceService:
         if source.status != "collection_failed":
             raise CollectionRetryNotAllowedError(source_id, source.status)
 
-        if note is not None:
+        # upload 채널은 URL 수집이 없고 raw_text(md 본문)가 곧 원문이다(AXKG-WORK-010 C-3,
+        # SPEC-012 §5 경계). user_note는 URL 수집 실패 fallback 전용이므로 upload에는 의미가
+        # 없다 — note가 와도 raw_text(원문)를 덮어쓰지 않도록 무시하고 원문 그대로 재큐한다.
+        # (재시도 자체는 막지 않는다: 재큐 후 build_data_blocks의 upload 분기로 요약 성공.)
+        if note is not None and source.source_channel != "upload":
             if len(note) > MAX_MANUAL_NOTE_LENGTH:
                 raise ManualNoteTooLongError
             await self._sources.set_raw_text(source_id, note)

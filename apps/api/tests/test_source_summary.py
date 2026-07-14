@@ -348,6 +348,80 @@ async def test_builder_user_note_fallback_when_collection_fails(
 
 
 # ---------------------------------------------------------------------------
+# upload 채널: URL 수집 스킵 · md 본문(raw_text)이 곧 원문 (PLAN-013-T-011, WORK-010 C-3)
+# ---------------------------------------------------------------------------
+
+
+async def _new_upload_source(
+    session: AsyncSession, *, raw_text: str, filename: str = "note.md"
+) -> uuid.UUID:
+    """source_channel=upload source (source_url=None, raw_text=md 본문·필수)."""
+    src = await SourceRepository(session).create(
+        source_url=None,
+        normalized_url=None,
+        source_channel="upload",
+        submitted_by=None,
+        submitted_at=utcnow(),
+        raw_text=raw_text,
+        original_filename=filename,
+    )
+    return src.id
+
+
+async def test_builder_upload_skips_collect_and_uses_raw_text(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # 실 collect 경로(fake 주입 아님): upload면 collect가 절대 호출되지 않고 raw_text가 곧
+    # 요약 입력이 된다. _collect_forbidden은 호출되면 AssertionError로 실패시킨다 —
+    # source_url=None으로 collect를 탔다면 INVALID_URL로 죽던 prod 버그(786d3a5d) 회귀 방지.
+    body = "# 업로드 노트\n\n" + ("핵심 문장. " * 50)
+    async with session_factory() as session:
+        source_id = await _new_upload_source(session, raw_text=body, filename="note.md")
+        svc = SourceService(session)
+        task = await svc._enqueue_summary_task(source_id, None)
+        definition = await svc._definitions.get_by_key("collect_source_summary")
+        builder = SourceSummaryContextBuilder(session, collect=_collect_forbidden)
+
+        blocks = await builder.build_data_blocks(task, definition)
+        labels = [b.label for b in blocks]
+        assert "source" in labels and "content" in labels
+        assert builder.last_material is not None
+        # user_note fallback이 아니라 upload 원문 그 자체(adapter=upload).
+        assert builder.last_material.adapter == "upload"
+        assert builder.last_material.content_text == body
+        content_block = next(b for b in blocks if b.label == "content")
+        assert "핵심 문장." in content_block.text
+
+
+async def test_queue_collection_upload_ignores_note_and_requeues(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # upload 재시도: note가 와도 raw_text(md 본문·원문)를 덮어쓰지 않고 재큐된다.
+    # 재큐 후 build_data_blocks의 upload 분기로 요약이 collect 없이 성공하는 경로.
+    body = "# 원문\n\n" + ("문단. " * 40)
+    async with session_factory() as session:
+        source_id = await _new_upload_source(session, raw_text=body)
+        # collection_failed로 두어 재시도 경로를 연다(버그로 실패했던 prod 상태 재현).
+        await SourceRepository(session).set_status(source_id, "collection_failed")
+        svc = SourceService(session)
+
+        result = await svc.queue_collection(source_id, note="덮어쓰면 안 되는 메모")
+        assert result.source.status == "summarizing"
+        assert result.ai_task.status == "queued"  # 새 요약 task 재큐
+
+        source = await SourceRepository(session).get(source_id)
+        assert source.raw_text == body  # note가 원문(raw_text)을 덮어쓰지 않았다
+
+        # 재큐된 task가 upload 분기로 collect 없이 컨텍스트를 만든다.
+        builder = SourceSummaryContextBuilder(session, collect=_collect_forbidden)
+        blocks = await builder.build_data_blocks(
+            result.ai_task, await svc._definitions.get_by_key("collect_source_summary")
+        )
+        assert builder.last_material.content_text == body
+        assert "content" in [b.label for b in blocks]
+
+
+# ---------------------------------------------------------------------------
 # resume 잠복 버그 (PLAN-010-T-008): bare resume=true + 세션 유실 → full 컨텍스트
 # ---------------------------------------------------------------------------
 

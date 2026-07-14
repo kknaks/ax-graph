@@ -25,11 +25,38 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from axkg.dto.ai import AiTaskDefinitionDTO, AiTaskDTO, AssembledBlockDTO
 from axkg.dto.source_material import SourceMaterial
 from axkg.integrations.source_collection import CollectionError, collect_source
+from axkg.integrations.source_collection.base import utc_now_iso
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai.context import ContextBuilder, ContextBuildError
 from axkg.services.ai.resolution import is_resume_session
 
 HANDLER_KIND = "source_summary"
+
+# 업로드 채널(source_channel=upload) 원문 합성 표현. 업로드된 md 본문(raw_text)이 곧 원문이라
+# adapter 수집을 거치지 않고 SourceMaterial로 감싼다(AXKG-WORK-010 C-3, SPEC-012 §5 경계).
+# chat의 user_note fallback("수집 실패 시 대체")과 달리 원문 그 자체다 — content_format 등
+# 합성 표현은 구현 소관(SPEC-012 §5). URL이 없어 source_url/canonical_url은 빈 문자열.
+UPLOAD_ADAPTER = "upload"
+UPLOAD_FORMAT = "markdown"
+
+
+def build_upload_material(raw_text: str, *, filename: str | None = None) -> SourceMaterial:
+    """업로드 md 본문(raw_text)을 요약 입력 SourceMaterial로 합성한다 (수집 미경유, 원문 그 자체).
+
+    URL 수집 단계가 없는 upload 채널의 원문 표현이다. user_note fallback과 달리 "수집 실패
+    시 대체"가 아니라 업로드 본문이 곧 원문이다(AXKG-WORK-010 C-3, SPEC-012 §5 경계).
+    """
+    return SourceMaterial(
+        source_url="",
+        canonical_url="",
+        adapter=UPLOAD_ADAPTER,
+        title=filename,
+        content_text=raw_text,
+        content_format=UPLOAD_FORMAT,
+        fetch_method=UPLOAD_ADAPTER,
+        fetched_at=utc_now_iso(),
+        metadata={"original_filename": filename} if filename else {},
+    )
 
 # 단일 실행 컨텍스트에 담는 chunk 한 조각의 최대 길이(문자). 초과 원문은 여러 chunk
 # 블록으로 나눠 한 번의 요약 실행에서 병합하도록 지시한다. 수집 상한(200_000)보다 작다.
@@ -166,13 +193,24 @@ class SourceSummaryContextBuilder(ContextBuilder):
                 "SOURCE_NOT_FOUND", f"source 없음: {task.source_id}"
             )
 
-        # 원문 수집 (AXKG-SPEC-012). 수집 실패는 Failure Contract code 그대로 표면화.
-        # 저장된 메모(raw_text)를 user_note로 주입 — 원문 수집이 모두 실패하면 메모로
-        # 요약하는 최종 fallback이 된다(PLAN-005-T-013). 메모 없으면 collection_failed.
-        try:
-            material = await self._collect(source.source_url, user_note=source.raw_text)
-        except CollectionError as exc:
-            raise ContextBuildError(exc.code, exc.message) from exc
+        # upload 채널: URL 수집 단계가 없다. 업로드된 md 본문(raw_text)이 곧 원문이므로
+        # adapter를 거치지 않고 그대로 SourceMaterial로 합성한다(AXKG-WORK-010 C-3,
+        # SPEC-012 §5 경계). collect를 호출하지 않아 source_url=None으로도 INVALID_URL이
+        # 발생하지 않는다. user_note fallback 경로가 아니다 — 원문 그 자체다.
+        if source.source_channel == "upload":
+            material = build_upload_material(
+                source.raw_text or "", filename=source.original_filename
+            )
+        else:
+            # 원문 수집 (AXKG-SPEC-012). 수집 실패는 Failure Contract code 그대로 표면화.
+            # 저장된 메모(raw_text)를 user_note로 주입 — 원문 수집이 모두 실패하면 메모로
+            # 요약하는 최종 fallback이 된다(PLAN-005-T-013). 메모 없으면 collection_failed.
+            try:
+                material = await self._collect(
+                    source.source_url, user_note=source.raw_text
+                )
+            except CollectionError as exc:
+                raise ContextBuildError(exc.code, exc.message) from exc
         self.last_material = material
 
         blocks: list[AssembledBlockDTO] = [
