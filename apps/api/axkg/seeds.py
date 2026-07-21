@@ -465,7 +465,12 @@ PROMPT_SEEDS: list[dict] = [
             "- **요청부서·요청 이력을 넣지 않는다**(기능은 프로젝트의 기능 카탈로그, 부서 무관).\n\n"
             "출력은 output_schema를 따르는 JSON 하나로만 한다(코드펜스·해설 없이 JSON 객체만, "
             "document_draft 하나). JSON 앞뒤에 어떤 설명·해설 문장도 붙이지 마라 — 응답의 첫 글자는 "
-            "`{`, 마지막 글자는 `}`여야 한다."
+            "`{`, 마지막 글자는 `}`여야 한다.\n"
+            "**출력 구조 주의**: 구조화 `links` 배열은 반드시 `document_draft` 객체 **안**에 넣어라. "
+            "최상위(top-level)에는 `document_draft` 하나만 허용된다 — 최상위에 `links` 등 다른 키를 "
+            "두면 output_schema 검증에서 거부된다(OUTPUT_SCHEMA_MISMATCH: 'links' unexpected). "
+            "본문 `## 8. 연결`의 `[[stem]]`과 `document_draft.links`(target/edge_type/link_reason)를 "
+            "서로 대응시켜라."
         ),
         "output_schema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
