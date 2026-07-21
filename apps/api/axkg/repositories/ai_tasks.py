@@ -103,6 +103,36 @@ class AiTaskRepository:
         ).all()
         return [_to_dto(row) for row in rows]
 
+    async def list_by_gate(
+        self, gate_id: uuid.UUID, task_type: str | None = None
+    ) -> list[AiTaskDTO]:
+        """gate에 연결된 ai_task 목록(queued_at 오름차순). plan-then-fanout fan-in 취합용.
+
+        task_type을 주면 그 타입만(예: generate_feature_spec). 재시도 체인이 있으면 같은 gate에
+        여러 row가 쌓이므로 호출측이 seq별 최신을 고른다.
+        """
+        query = sa.select(AiTask).where(AiTask.gate_id == gate_id)
+        if task_type is not None:
+            query = query.where(AiTask.task_type == task_type)
+        rows = (
+            await self._session.scalars(
+                query.order_by(AiTask.queued_at.asc(), AiTask.retry_count.asc())
+            )
+        ).all()
+        return [_to_dto(row) for row in rows]
+
+    async def merge_payload(
+        self, task_id: uuid.UUID, patch: dict[str, Any]
+    ) -> AiTaskDTO:
+        """task.payload에 patch를 병합한다(plan-then-fanout: 기능 산출물 보관 등).
+
+        JSONB는 재대입해야 변경이 flush된다(in-place mutate는 dirty 감지 안 됨).
+        """
+        row = await self._get_row(task_id)
+        row.payload = {**(row.payload or {}), **patch}
+        await self._session.flush()
+        return _to_dto(row)
+
     async def get_latest_failed_by_source(
         self, source_id: uuid.UUID, task_type: str
     ) -> AiTaskDTO | None:

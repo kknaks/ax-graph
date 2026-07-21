@@ -18,6 +18,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
+    Form,
     HTTPException,
     Request,
     Response,
@@ -26,7 +27,9 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from axkg.config import settings as app_settings
 from axkg.core.database import get_session
+from axkg.storage.markdown_root import MarkdownRoot
 from axkg.core.security import get_current_user
 from axkg.dto.auth import UserDTO
 from axkg.integrations.open_kknaks import OpenKknaksClient
@@ -143,15 +146,18 @@ async def create_upload(
     request: Request,
     background: BackgroundTasks,
     file: UploadFile = File(...),
+    note: str | None = Form(default=None),
     user: UserDTO = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> SourceResponse:
-    """md 파일 업로드 intake → `source_channel=upload` source를 received로 저장 (S-5, WORK-010).
+    """파일 업로드 intake → `source_channel=upload` source를 received로 저장 (S-5, WORK-010/011).
 
     admin 전용(sources 라우터가 `require_admin`으로 등록 — 기존 인박스 표면 경계 그대로,
-    `/sources/manual`과 동일 authz 수준). multipart `file`, v1은 `.md`만 허용하고 그 외는
-    `UNSUPPORTED_UPLOAD_TYPE`(422)로 source 미생성 거부한다. 업로드 md 본문 자체가 원문이라
-    URL 수집 없이 곧 요약 입력이 되어(fallback 아님) manual과 동일하게 요약 파이프라인에 합류한다.
+    `/sources/manual`과 동일 authz 수준). multipart `file`(+선택 `note` 메모), v1은 `.md`·`.docx`만
+    허용하고 그 외는 `UNSUPPORTED_UPLOAD_TYPE`(422)로 source 미생성 거부한다. 업로드 본문 자체가
+    원문이라 URL 수집 없이 곧 요약 입력이 되어(fallback 아님) manual과 동일하게 요약 파이프라인에
+    합류한다. docx는 본문 텍스트만 추출되고(WP11 Phase 2), 메모(회사명 등)는 탭 무관 항상 요약
+    컨텍스트로 동반된다(SPEC-003). 첨부 docx 원본은 origin으로 best-effort 보관된다.
     """
     service = SourceService(session)
     content = await file.read()
@@ -160,13 +166,17 @@ async def create_upload(
             filename=file.filename,
             content=content,
             submitted_by=user.id,
+            note=note,
+            markdown_root=MarkdownRoot(app_settings.axkg_markdown_root),
         )
     except UnsupportedUploadTypeError:
-        raise _error(422, "UNSUPPORTED_UPLOAD_TYPE", "md 파일만 업로드할 수 있습니다.")
+        raise _error(422, "UNSUPPORTED_UPLOAD_TYPE", "md 또는 docx 파일만 업로드할 수 있습니다.")
+    except ManualNoteTooLongError:
+        raise _error(400, "MANUAL_NOTE_TOO_LONG", "메모는 2000자 이하로 입력해 주세요.")
     except UploadTooLargeError:
         raise _error(413, "UPLOAD_TOO_LARGE", "업로드 파일이 너무 큽니다(최대 1MB).")
     except EmptyUploadTextError:
-        raise _error(422, "EMPTY_UPLOAD_TEXT", "업로드한 md 파일이 비어 있습니다.")
+        raise _error(422, "EMPTY_UPLOAD_TEXT", "업로드한 파일 본문이 비어 있습니다.")
 
     # SPEC-003 S-5: received → 자동 요약 트리거(파이프라인 합류). create_manual과 동일 배선.
     client = _open_kknaks_client(request)

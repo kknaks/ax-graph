@@ -26,11 +26,21 @@ from axkg.dto.ai import AiTaskDefinitionDTO, AiTaskDTO, AssembledBlockDTO
 from axkg.dto.source_material import SourceMaterial
 from axkg.integrations.source_collection import CollectionError, collect_source
 from axkg.integrations.source_collection.base import utc_now_iso
+from axkg.integrations.source_collection.docx_text import (
+    DOCX_ADAPTER,
+    DOCX_FORMAT,
+    is_docx_filename,
+)
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai.context import ContextBuilder, ContextBuildError
 from axkg.services.ai.resolution import is_resume_session
 
 HANDLER_KIND = "source_summary"
+
+# intake 메모 저장 위치(sources.metadata). 탭(url/md/docx)과 무관하게 항상 존재할 수 있고,
+# 존재하면 요약 컨텍스트로 동반된다(AXKG-SPEC-003 intake 메모, WP11 Phase 2). 회사명 등
+# 분류·팬아웃에 필요한 힌트가 여기 담긴다(Phase 4 corp 바인딩이 같은 키를 읽는다).
+INTAKE_NOTE_KEY = "intake_note"
 
 # 업로드 채널(source_channel=upload) 원문 합성 표현. 업로드된 md 본문(raw_text)이 곧 원문이라
 # adapter 수집을 거치지 않고 SourceMaterial로 감싼다(AXKG-WORK-010 C-3, SPEC-012 §5 경계).
@@ -41,19 +51,24 @@ UPLOAD_FORMAT = "markdown"
 
 
 def build_upload_material(raw_text: str, *, filename: str | None = None) -> SourceMaterial:
-    """업로드 md 본문(raw_text)을 요약 입력 SourceMaterial로 합성한다 (수집 미경유, 원문 그 자체).
+    """업로드 본문(raw_text)을 요약 입력 SourceMaterial로 합성한다 (수집 미경유, 원문 그 자체).
 
     URL 수집 단계가 없는 upload 채널의 원문 표현이다. user_note fallback과 달리 "수집 실패
     시 대체"가 아니라 업로드 본문이 곧 원문이다(AXKG-WORK-010 C-3, SPEC-012 §5 경계).
+
+    docx 업로드(WP11 Phase 2)는 서비스가 이미 본문 텍스트를 추출해 raw_text에 담아 두므로,
+    여기서는 어휘만 `docx_text`/`doc_text`로 표기한다(표/이미지 파싱 계약 없음, AXKG-DEC-007 D5).
+    md 업로드는 종전대로 `upload`/`markdown`이다.
     """
+    is_docx = is_docx_filename(filename)
     return SourceMaterial(
         source_url="",
         canonical_url="",
-        adapter=UPLOAD_ADAPTER,
+        adapter=DOCX_ADAPTER if is_docx else UPLOAD_ADAPTER,
         title=filename,
         content_text=raw_text,
-        content_format=UPLOAD_FORMAT,
-        fetch_method=UPLOAD_ADAPTER,
+        content_format=DOCX_FORMAT if is_docx else UPLOAD_FORMAT,
+        fetch_method=DOCX_ADAPTER if is_docx else UPLOAD_ADAPTER,
         fetched_at=utc_now_iso(),
         metadata={"original_filename": filename} if filename else {},
     )
@@ -220,6 +235,10 @@ class SourceSummaryContextBuilder(ContextBuilder):
                 text=self._render_source_block(source.source_url, material),
             ),
         ]
+        # intake 메모(있으면) — 탭 무관 항상 요약 컨텍스트로 동반한다(SPEC-003, WP11 Phase 2).
+        note_block = self._intake_note_block(source.metadata or {})
+        if note_block is not None:
+            blocks.append(note_block)
 
         chunks = chunk_content(material.content_text, MAX_CHUNK_CHARS)
         self.last_chunk_count = len(chunks)
@@ -270,6 +289,26 @@ class SourceSummaryContextBuilder(ContextBuilder):
             output,
             ai_task_id=task.id,
             open_kknaks_session_id=task.open_kknaks_session_id,
+        )
+
+    @staticmethod
+    def _intake_note_block(metadata: dict[str, Any]) -> AssembledBlockDTO | None:
+        """intake 메모 블록 — 있으면 요약 컨텍스트로 항상 동반한다(SPEC-003, WP11 Phase 2).
+
+        회사명 등 원문 밖 힌트가 담긴다. 메모는 원문(content)이 아니라 사용자가 붙인 맥락이므로
+        원문과 구분되는 별도 블록으로 넣는다(요약①이 원문과 섞지 않게).
+        """
+        note = (metadata.get(INTAKE_NOTE_KEY) or "").strip()
+        if not note:
+            return None
+        return AssembledBlockDTO(
+            kind="data",
+            label="intake_note",
+            text=(
+                "[인박스 메모] 사용자가 이 자료를 올리며 남긴 메모다(원문 본문이 아니라 맥락). "
+                "회사명 등 원문에 없는 힌트가 있으면 요약에 반영하되 지어내지는 마라.\n"
+                + note
+            ),
         )
 
     @staticmethod

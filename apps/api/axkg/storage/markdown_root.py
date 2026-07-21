@@ -111,6 +111,41 @@ class MarkdownRoot:
         path.write_text(content, encoding="utf-8")
         return rel
 
+    def write_bytes(self, rel: str, data: bytes) -> str:
+        """바이너리 파일 쓰기(origin 첨부 원본 raw 보관, WP11 Phase 4).
+
+        경로 안전(resolve)을 거쳐 root 하위에만 쓴다. origin(.docx 등)은 그래프 노드가 아니라
+        바인드 마운트 raw 파일이다(`documents` 테이블/인덱스 미편입, iter_markdown이 *.md만 스캔).
+        """
+        path = self.resolve(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return rel
+
+    def read_bytes(self, rel: str) -> bytes:
+        return self.resolve(rel).read_bytes()
+
+    def mkdirs(self, rel: str) -> str:
+        """디렉토리 생성(회사 프로젝트 스캐폴드, WP11 Phase 5). 이미 있으면 멱등 통과."""
+        self.resolve(rel).mkdir(parents=True, exist_ok=True)
+        return rel
+
+    def is_dir(self, rel: str) -> bool:
+        try:
+            return self.resolve(rel).is_dir()
+        except PathEscapesRootError:
+            return False
+
+    def list_child_names(self, rel: str) -> list[str]:
+        """rel 디렉토리의 바로 아래 항목 이름 목록(파일+디렉토리, 정렬). 없으면 빈 목록."""
+        try:
+            directory = self.resolve(rel)
+        except PathEscapesRootError:
+            return []
+        if not directory.is_dir():
+            return []
+        return sorted(p.name for p in directory.iterdir())
+
     def remove(self, rel: str) -> bool:
         """옛 경로 문서를 제거(경로 변경 재문서화, SPEC-004 Document Lifecycle).
 

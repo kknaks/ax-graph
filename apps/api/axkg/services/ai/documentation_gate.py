@@ -36,6 +36,11 @@ from axkg.services.ai.resolution import is_resume_session
 from axkg.services.document_paths import (
     assemble_derived_create_path,
     assemble_main_path,
+    normalize_filename,
+)
+from axkg.services.project_scaffold import (
+    project_baseline_path,
+    project_spec_path,
 )
 from axkg.services.documents import DocumentService
 from axkg.services.graph import GraphService
@@ -51,22 +56,34 @@ FORM_SCHEMA_VERSION = "documentation.v1"
 APPLY_PLAN_SCHEMA_VERSION = "apply_plan.v1"
 
 # destination → 활성 템플릿 key (AXKG-SPEC-010) / 초안 document_type (AXKG-SPEC-005, DEC-005).
+# project는 회사 프로젝트 팬아웃(AXKG-SPEC-014): main=원본요약(project_source_summary,
+# document_type=baseline)이고, 기능정의서(feature_spec)는 파생으로 나온다(고정 동봉 템플릿).
 DESTINATION_TEMPLATE_KEY = {
     "resource": "reference",
     "area": "permanent",
-    "project": "project_baseline",
+    "project": "project_source_summary",
 }
 DESTINATION_DOCUMENT_TYPE = {
     "resource": "reference",
     "area": "permanent",
     "project": "baseline",
 }
+PROJECT_DESTINATION = "project"
 # 파생지식 change_kind → 기본 file_action (Derived Knowledge Apply Matrix, SPEC-004).
 _DEFAULT_FILE_ACTION = {"create": "create_markdown", "modify": "overwrite_markdown"}
-_MODIFY_SUGGESTION = "supplement_existing_concept"
+# supplement류(modify) suggestion_type 집합. feature dedup(supplement_existing_feature)은
+# 후속 WP에서 배선되지만, 정규화 로직이 두 supplement를 modify로 다루도록 여기 포함한다.
+_MODIFY_SUGGESTIONS = frozenset(
+    {"supplement_existing_concept", "supplement_existing_feature"}
+)
+_CREATE_FEATURE_SPEC = "create_feature_spec"
 # 파생 concept 전용 뼈대 template key — destination 매핑이 아니라 문서화③ 조립에 고정 동봉
 # (PLAN-009-T-027, Layer Taxonomy: 고정 산출 타입 md 뼈대=템플릿, SPEC-011 §4).
 _CONCEPT_TEMPLATE_KEY = "concept"
+# 파생 기능정의서 전용 뼈대 template key — project 팬아웃 시 concept처럼 문서화③에 고정 동봉
+# 주입한다(AXKG-SPEC-010/014, WP11 Phase 3). derived_suggestions[]의 create_feature_spec가 이
+# 뼈대를 따른다.
+_FEATURE_SPEC_TEMPLATE_KEY = "project_feature_spec"
 
 # 초안 body preview 길이(문자). frontmatter는 전량 preview.
 _BODY_PREVIEW_LEN = 600
@@ -102,22 +119,32 @@ def empty_documentation_payload(
 def _normalize_derived(
     suggestion: dict[str, Any],
     resolve_existing_path: ResolvePathFn | None = None,
+    *,
+    corp: str | None = None,
 ) -> dict[str, Any]:
     """AI derived_suggestion을 SPEC-004 Data Contract 형태로 정규화한다.
 
-    change_kind는 suggestion_type에서 파생(supplement→modify, create_*→create).
+    change_kind는 suggestion_type에서 파생(supplement*→modify, create_*→create).
     경로(target_path)는 **시스템이 조립**한다(PLAN-009-T-040, AI는 경로를 내지 않음):
-    - create: suggestion_type 디렉토리 + 정규화된 filename_candidate.
+    - create_feature_spec(회사 프로젝트 팬아웃, WP11): projects/{corp}/spec/{stem}.md.
+    - 그 외 create: suggestion_type 디렉토리 + 정규화된 filename_candidate.
     - modify: target_stem을 resolver로 기존 경로 해소. 해소 실패면 "" — executor 안전망
       (PATH_NOT_ALLOWED)에 맡긴다(신규 에러코드 발명 금지).
     """
     suggestion_type = suggestion.get("suggestion_type")
-    change_kind = "modify" if suggestion_type == _MODIFY_SUGGESTION else "create"
+    change_kind = "modify" if suggestion_type in _MODIFY_SUGGESTIONS else "create"
     file_action = suggestion.get("file_action") or _DEFAULT_FILE_ACTION[change_kind]
     if change_kind == "create":
-        target_path = assemble_derived_create_path(
-            suggestion_type, suggestion.get("filename_candidate")
-        )
+        if suggestion_type == _CREATE_FEATURE_SPEC:
+            # 기능정의서는 projects/{corp}/spec/에 신규 생성(create-only, v1). corp 미확정이면
+            # ""로 두어 executor 안전망(PATH_NOT_ALLOWED)이 잡게 한다(무근거 경로 생성 금지).
+            target_path = project_spec_path(
+                corp or "", normalize_filename(suggestion.get("filename_candidate"))
+            )
+        else:
+            target_path = assemble_derived_create_path(
+                suggestion_type, suggestion.get("filename_candidate")
+            )
     else:
         stem = suggestion.get("target_stem")
         target_path = ""
@@ -177,21 +204,32 @@ def wrap_documentation_output(
     *,
     prior_main_path: str | None = None,
     resolve_existing_path: ResolvePathFn | None = None,
+    corp: str | None = None,
 ) -> dict[str, Any]:
     """스키마 통과 출력을 documentation.v1 공통 envelope로 감싼다(SPEC-002/004).
 
     경로(target_path)는 시스템이 조립한다(PLAN-009-T-040): main은 prior main이 있으면 그
     경로 재사용(재생성 v2에서 파일명 흔들려도 경로 고정), 없으면 타입 디렉토리 + 정규화된
     filename. 조립 결과는 envelope의 기존 target_path 자리에 저장 — FE 계약 무변경.
+
+    project 팬아웃(WP11): corp가 바인딩되면 main(원본요약)은 projects/{corp}/baseline/,
+    파생 기능정의서(create_feature_spec)는 projects/{corp}/spec/로 조립된다. corp 미바인딩
+    (매칭 프로젝트 없음)이면 팬아웃 없이 종전 flat 경로(projects/)로 떨어진다(v1: 팬아웃 skip).
     """
     raw_draft = output.get("document_draft") or {}
     markdown_full = raw_draft.get("markdown_full", "")
     _, body = split_frontmatter(markdown_full)
     frontmatter_preview = markdown_full[: len(markdown_full) - len(body)].strip()
     document_type = DESTINATION_DOCUMENT_TYPE.get(destination_type, "reference")
-    target_path = prior_main_path or assemble_main_path(
-        document_type, raw_draft.get("filename_candidate")
-    )
+    if destination_type == PROJECT_DESTINATION and corp:
+        assembled_main = project_baseline_path(
+            corp, normalize_filename(raw_draft.get("filename_candidate"))
+        )
+    else:
+        assembled_main = assemble_main_path(
+            document_type, raw_draft.get("filename_candidate")
+        )
+    target_path = prior_main_path or assembled_main
     document_draft = {
         "document_type": document_type,
         "target_path": target_path,
@@ -202,7 +240,7 @@ def wrap_documentation_output(
         "links": raw_draft.get("links", []),
     }
     derived = [
-        _normalize_derived(s, resolve_existing_path)
+        _normalize_derived(s, resolve_existing_path, corp=corp)
         for s in output.get("derived_suggestions", [])
     ]
     return {
@@ -257,6 +295,13 @@ class DocumentationGateContextBuilder(ContextBuilder):
         destination_type = self._destination(task, source)
         connection_block = await self._connection_candidates_block(source)
         concept_block = await self._concept_template_block()
+        # project 팬아웃(WP11): 기능정의서 파생 뼈대(project_feature_spec)를 concept처럼 고정
+        # 동봉한다. project가 아니면 None(다른 destination엔 주입하지 않음).
+        feature_spec_block = (
+            await self._feature_spec_template_block()
+            if destination_type == PROJECT_DESTINATION
+            else None
+        )
 
         # stale 재생성(SPEC-004 §E-3): 사용자가 연 재생성 게이트. 입력 계약 = 대상 permanent
         # 전문 + 바뀐 concept 전문 + 변경 요지(문서당 소형 컨텍스트). 피드백 경로가 아니라
@@ -288,12 +333,13 @@ class DocumentationGateContextBuilder(ContextBuilder):
                     self._prior_payload_block(prior_payload),
                     connection_block,
                     concept_block,
+                    feature_spec_block,
                     self._feedback_block(str(feedback)),
                 ]
                 if block is not None
             ]
 
-        # 최초 생성: 요약 + 승인 분류 결과 + 연결 후보 2단 컨텍스트 + 파생 concept 뼈대.
+        # 최초 생성: 요약 + 승인 분류 결과 + 연결 후보 2단 컨텍스트 + 파생 concept/기능정의서 뼈대.
         return [
             block
             for block in [
@@ -301,6 +347,7 @@ class DocumentationGateContextBuilder(ContextBuilder):
                 await self._classification_block(source, destination_type),
                 connection_block,
                 concept_block,
+                feature_spec_block,
             ]
             if block is not None
         ]
@@ -349,6 +396,7 @@ class DocumentationGateContextBuilder(ContextBuilder):
             output,
             prior_main_path=prior_main.path if prior_main is not None else None,
             resolve_existing_path=resolve_existing_path,
+            corp=self._corp(task),
         )
         # 이 revision을 reviewable로 올리기 전에, 같은 gate의 다른 모든 reviewable 형제를
         # superseded로 sweep한다(SPEC-002 §5). 빠른 연속 재생성 병렬 완료 시 parent 단건
@@ -379,6 +427,13 @@ class DocumentationGateContextBuilder(ContextBuilder):
         return task.payload.get("destination_type") or source.destination_type or "resource"
 
     @staticmethod
+    def _corp(task: AiTaskDTO) -> str | None:
+        """회사 프로젝트 slug(corp). 분류 project 확정 시 게이트가 task.payload에 실어 보낸다
+        (WP11 Phase 4 corp 바인딩). 없으면 None → 팬아웃 없이 flat 경로로 떨어진다."""
+        corp = task.payload.get("corp")
+        return str(corp) if corp else None
+
+    @staticmethod
     def _summary_data_block(source: SourceDTO, destination_type: str) -> AssembledBlockDTO:
         payload = {
             "source_url": source.source_url,
@@ -391,6 +446,27 @@ class DocumentationGateContextBuilder(ContextBuilder):
             text=(
                 "[문서화 대상 source 요약]\n"
                 + json.dumps(payload, ensure_ascii=False, indent=2)
+            ),
+        )
+
+    async def _feature_spec_template_block(self) -> AssembledBlockDTO | None:
+        """파생 기능정의서 전용 뼈대 블록(project 팬아웃 고정 동봉, WP11 Phase 3).
+
+        project destination에서 `create_feature_spec` 파생의 draft_markdown이 따를 골격
+        (요구 배경~수용 기준·`## 8. 연결`)을 프롬프트에 함께 주입한다. 템플릿이 아직 시딩되지
+        않았으면 블록을 생략한다(프롬프트 서술로도 골격 유도 가능).
+        """
+        template = await self._templates.get_active_version(_FEATURE_SPEC_TEMPLATE_KEY)
+        if template is None:
+            return None
+        return AssembledBlockDTO(
+            kind="template_frame",
+            label="feature_spec_template",
+            text=(
+                "[파생 기능정의서 뼈대] project 팬아웃에서 create_feature_spec 파생의 "
+                "draft_markdown은 아래 뼈대(frontmatter·섹션 구조)를 그대로 따른다. 요구 1항목=1장, "
+                "요청부서·요청 이력은 넣지 않는다(기능 dedup, 부서 무관):\n\n"
+                + template.body
             ),
         )
 

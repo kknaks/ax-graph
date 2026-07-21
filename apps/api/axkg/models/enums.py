@@ -49,6 +49,8 @@ DOCUMENT_TYPE = (
     "permanent",
     "concept",
     "baseline",
+    # 회사 프로젝트 팬아웃 기능정의서 (AXKG-SPEC-014/010, WP11). projects/{corp}/spec/ 파생.
+    "feature_spec",
     "decision",
     "spec",
     "work",
@@ -65,6 +67,10 @@ AI_HANDLER_KIND = (
     "classification_gate",
     "documentation_gate",
     "graph_rag_chat",
+    # plan-then-fanout (project 문서화 생성 재설계, AXKG-DEC-008/WORK-012).
+    # plan_project=① 원본요약+기능목록(plan) 산출, feature_spec=② 기능정의서 1장 생성.
+    "plan_project",
+    "feature_spec",
 )
 # ai_tasks.task_type SSOT는 AXKG-SPEC-011 Stage Execution Contract 표.
 AI_TASK_TYPE = (
@@ -74,6 +80,9 @@ AI_TASK_TYPE = (
     "generate_documentation_gate",
     "regenerate_documentation_gate",
     "graph_rag_chat",
+    # plan-then-fanout (AXKG-DEC-008/WORK-012). project 문서화를 기능 단위로 쪼갠다.
+    "plan_project",
+    "generate_feature_spec",
 )
 GATE_FEEDBACK_STATUS = ("submitted", "consumed", "cancelled")
 DRAFT_TYPE = ("main_document", "derived_suggestion")

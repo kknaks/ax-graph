@@ -71,6 +71,9 @@ AI_TASK_MODEL_OVERRIDES = {
     "generate_documentation_gate": {"model": AI_TASK_MODEL},
     "regenerate_documentation_gate": {"model": AI_TASK_MODEL},
     "graph_rag_chat": {"model": AI_TASK_MODEL},
+    # plan-then-fanout (AXKG-DEC-008/WORK-012) — project 문서화 생성 재설계.
+    "plan_project": {"model": AI_TASK_MODEL},
+    "generate_feature_spec": {"model": AI_TASK_MODEL},
 }
 
 # 글로벌 기본값(PLAN-010-T-012): 신규 DB가 현재 운영값으로 태어나게 한다.
@@ -239,6 +242,23 @@ PROMPT_SEEDS: list[dict] = [
             "— 링크만 걸고 넘어가지 마라. 새 정보가 없으면 링크만으로 충분하다.\n"
             "- **supplement(modify) 규율**: 주입된 기존 전문의 내용을 보존하며 새 출처의 내용을 "
             "합류시켜라. 지적·추가분 외에는 갈아엎지 마라(기존 서술 보존).\n\n"
+            "## project(회사 프로젝트) 팬아웃 분기\n"
+            "destination이 project면 산출을 한 장이 아니라 회사 프로젝트로 팬아웃한다(AXKG-SPEC-014). "
+            "resource/area 분기(위)는 그대로 두고, project일 때만 아래를 따른다.\n"
+            "- **main_document = 원본요약**: 회사 docx 요구 전체를 project_source_summary 뼈대"
+            "(요구 개요/기능 목록/원본 맥락/연결)에 맞춰 document_draft로 낸다. `## 기능 목록`은 아래에서 "
+            "분해한 각 기능을 `[[기능-stem]]`으로 링크해 baseline↔spec 그래프를 연다.\n"
+            "- **요구를 기능 단위로 분해**: 요구 1항목 = 기능정의서 1장이다. 각 기능을 project_feature_spec "
+            "뼈대(요구 배경~수용 기준·`## 8. 연결`)에 맞춘 `create_feature_spec` 파생으로 낸다.\n"
+            "- **기능 dedup(같은 corp 한정)**: 같은 회사에 이미 있는 기능정의서와 매칭되면 신규 생성이 "
+            "아니라 `supplement_existing_feature`로 그 기존 spec을 보강한다(target_stem에 대상 기능정의서 "
+            "stem 지목, 신규 생성 X). 매칭이 모호하면 신규 `create_feature_spec`으로 안전 폴백한다. 회사를 "
+            "넘는 spec 재사용·통합은 하지 않는다.\n"
+            "- **차용 링크**: 각 기능정의서의 `## 8. 연결`에는 원본요약 링크(`[[{corp}-원본요약]]`)와 함께 "
+            "retriever + documents index로 훑은 ax-graph 기존 역량 차용 링크(`[[graph-chat]]` 등)를 "
+            "제안한다. 빈 `[[ ]]`는 두지 않는다.\n"
+            "- **요청부서·요청 이력을 넣지 않는다** — 기능은 프로젝트의 기능 카탈로그이지 특정 부서 "
+            "귀속이 아니다(기능 dedup, 부서 무관 — AXKG-DEC-007).\n\n"
             "본문 초안 외에, 기존 문서 보강/새 concept/프로젝트 baseline이 필요하면 "
             "derived_suggestions로 제안하라. **파생 제안도 draft_markdown(문서 전문)이 필수다.**\n"
             "- create류(`create_new_concept`/`create_project_baseline`): frontmatter+본문을 갖춘 "
@@ -304,6 +324,11 @@ PROMPT_SEEDS: list[dict] = [
                                     "supplement_existing_concept",
                                     "create_new_concept",
                                     "create_project_baseline",
+                                    # 회사 프로젝트 팬아웃 기능정의서 (AXKG-SPEC-014, WP11).
+                                    # v1은 create_feature_spec(신규만) 사용. supplement_existing_feature는
+                                    # enum 값만 존재하고 dedup 로직 배선은 후속 WP.
+                                    "create_feature_spec",
+                                    "supplement_existing_feature",
                                 ],
                             },
                             "filename_candidate": {"type": "string", "minLength": 1},
@@ -335,6 +360,141 @@ PROMPT_SEEDS: list[dict] = [
                                 "else": {"required": ["filename_candidate"]},
                             }
                         ],
+                    },
+                },
+            },
+        },
+    },
+    {
+        # plan-then-fanout ① (AXKG-DEC-008/WORK-012): docx → 원본요약 + 기능목록(plan).
+        # 무거운 기능정의서 본문은 여기서 쓰지 않는다 — 가볍고 빠른 산출(발주서).
+        "key": "plan_project",
+        "name": "Project Plan",
+        "description": "plan-then-fanout ① — docx→원본요약+기능목록(plan) 산출 (AXKG-DEC-008)",
+        "prompt_text": (
+            "당신은 기업 AX 전환 요구 docx를 회사 프로젝트로 정리하는 기획자다. 목표는 두 가지를 "
+            "가볍게 산출하는 것이다 — (1) **원본요약**(회사가 뭘 요구했나, project_source_summary "
+            "뼈대) 1장, (2) **기능목록 plan**(요구를 기능 단위로 쪼갠 발주서). **개별 기능정의서 본문은 "
+            "여기서 쓰지 않는다** — 그건 이후 기능별 독립 task가 맡는다.\n\n"
+            "먼저 작업 프로젝트의 `context/documentation-guide.md`와 `context/document-link-rules.md`를 "
+            "읽고 원본요약 규칙을 따르라. 함께 주어진 원본요약 템플릿(project_source_summary) 뼈대의 "
+            "frontmatter·섹션 구조를 그대로 따르고, docx 원문 근거 안에서만 채워라.\n\n"
+            "## document_draft = 원본요약(main)\n"
+            "- 회사가 전체적으로 뭘 원하는지 `## 요구 개요`에 몇 문장으로.\n"
+            "- `## 기능 목록`은 아래 plan의 각 기능을 `[[기능-stem]]`(plan의 filename_candidate와 동일 "
+            "stem)으로 나열해 baseline↔spec 그래프를 연다. 빈 `[[ ]]`는 금지.\n"
+            "- 경로/디렉토리는 시스템이 조립한다 — filename_candidate에 파일명 stem만 낸다.\n\n"
+            "## plan = 기능목록(발주서)\n"
+            "- docx의 요구를 **기능 단위로 분해**해 plan 배열로 낸다. 요구 1항목 = plan 1개 = 기능정의서 "
+            "1장. 중복·너무 잘게 쪼갠 항목을 만들지 말고 실제 기능 경계로 나눈다.\n"
+            "- 각 항목: `seq`(1부터), `feature_name`(명사구 15자 이내), `filename_candidate`(파일명 "
+            "stem, 영문 kebab 권장, 원본요약 `## 기능 목록`의 `[[stem]]`과 정확히 일치), `summary`"
+            "(그 기능이 뭔지 1~2문장 — 이후 기능정의서 생성 task의 발주 요지).\n\n"
+            "출력은 output_schema를 따르는 JSON 하나로만 한다(코드펜스·해설 없이 JSON 객체만). "
+            "JSON 앞뒤에 어떤 설명·해설 문장도 붙이지 마라 — 응답의 첫 글자는 `{`, 마지막 글자는 "
+            "`}`여야 한다."
+        ),
+        "output_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["document_draft", "plan"],
+            "properties": {
+                "document_draft": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["filename_candidate", "markdown_full"],
+                    "properties": {
+                        "filename_candidate": {"type": "string", "minLength": 1},
+                        "markdown_full": {"type": "string", "minLength": 1},
+                        "links": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["target", "edge_type", "link_reason"],
+                                "properties": {
+                                    "target": {"type": "string"},
+                                    "edge_type": {
+                                        "type": "string",
+                                        "enum": ["assoc", "lineage"],
+                                    },
+                                    "link_reason": {"type": "string"},
+                                },
+                            },
+                        },
+                    },
+                },
+                "plan": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["seq", "feature_name", "filename_candidate", "summary"],
+                        "properties": {
+                            "seq": {"type": "integer", "minimum": 1},
+                            "feature_name": {"type": "string", "minLength": 1},
+                            "filename_candidate": {"type": "string", "minLength": 1},
+                            "summary": {"type": "string", "minLength": 1},
+                        },
+                    },
+                },
+            },
+        },
+    },
+    {
+        # plan-then-fanout ② (AXKG-DEC-008/WORK-012): plan 1개 기능 → 기능정의서 1장.
+        # 작고 집중된 출력이라 600초로 충분하고 병렬·기능별 재시도가 가능하다.
+        "key": "generate_feature_spec",
+        "name": "Feature Spec",
+        "description": "plan-then-fanout ② — plan 1항목→기능정의서 1장 생성 (AXKG-DEC-008)",
+        "prompt_text": (
+            "당신은 회사 프로젝트의 **기능 하나**를 기능정의서 1장으로 쓰는 작성자다. 주어진 것은 "
+            "(1) docx 원문, (2) 이 task가 맡은 **기능 항목**(plan: seq/기능명/요지), (3) 원본요약 stem, "
+            "(4) 연결 후보 컨텍스트다. **이 한 기능에만 집중**해 기능정의서 1장을 낸다 — 다른 기능은 "
+            "다루지 마라.\n\n"
+            "먼저 `context/documentation-guide.md`와 `context/document-link-rules.md`를 읽어라. 함께 "
+            "주어진 기능정의서 템플릿(project_feature_spec) 뼈대의 frontmatter·섹션 구조(요구 배경~수용 "
+            "기준·`## 8. 연결`)를 그대로 따르고, docx 원문 근거 안에서만 채워라(원문에 없는 사실 금지).\n\n"
+            "## 규칙\n"
+            "- **한 기능만**: 맡은 plan 기능명/요지에 해당하는 요구만 정의서로 쓴다.\n"
+            "- **경로는 시스템이 조립**한다 — filename_candidate에 파일명 stem만 낸다(원본요약 `## 기능 "
+            "목록`의 `[[stem]]`과 동일 stem을 쓰라 — 함께 주어진 plan의 filename_candidate).\n"
+            "- **`## 8. 연결`**: 원본요약 링크(`[[원본요약-stem]]`)를 반드시 걸고, 연결 후보 스냅샷 안의 "
+            "ax-graph 기존 역량 차용 링크(`[[graph-chat]]` 등)를 제안한다. 스냅샷 밖 target은 만들지 "
+            "말고, 빈 `[[ ]]`는 두지 마라.\n"
+            "- **요청부서·요청 이력을 넣지 않는다**(기능은 프로젝트의 기능 카탈로그, 부서 무관).\n\n"
+            "출력은 output_schema를 따르는 JSON 하나로만 한다(코드펜스·해설 없이 JSON 객체만, "
+            "document_draft 하나). JSON 앞뒤에 어떤 설명·해설 문장도 붙이지 마라 — 응답의 첫 글자는 "
+            "`{`, 마지막 글자는 `}`여야 한다."
+        ),
+        "output_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["document_draft"],
+            "properties": {
+                "document_draft": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["filename_candidate", "markdown_full"],
+                    "properties": {
+                        "filename_candidate": {"type": "string", "minLength": 1},
+                        "markdown_full": {"type": "string", "minLength": 1},
+                        "links": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["target", "edge_type", "link_reason"],
+                                "properties": {
+                                    "target": {"type": "string"},
+                                    "edge_type": {
+                                        "type": "string",
+                                        "enum": ["assoc", "lineage"],
+                                    },
+                                    "link_reason": {"type": "string"},
+                                },
+                            },
+                        },
                     },
                 },
             },
@@ -390,10 +550,13 @@ PROMPT_SEEDS: list[dict] = [
 
 # ---------------------------------------------------------------------------
 # document_templates (AXKG-SPEC-010, AXKG-DEC-005). body는 frontmatter + 섹션 뼈대.
-# main 3종(reference/permanent/project_baseline)은 destination→key 매핑으로 주입.
+# main 3종(reference/permanent/project_source_summary)은 destination→key 매핑으로 주입.
 # concept는 파생지식 전용 뼈대 — destination 매핑이 아니라 문서화③ 조립에 고정 동봉된다
 # (PLAN-009-T-027: concept 골격도 "고정 산출 타입 md 뼈대=템플릿" 이라 프롬프트 텍스트에서
 # 템플릿으로 이사. Layer Taxonomy 정합, SPEC-011 §4).
+# project 팬아웃(AXKG-DEC-007/SPEC-014)은 종전 단일 project_baseline을 project_source_summary
+# (원본요약, main)·project_feature_spec(기능정의서, 파생·문서화③ 고정 동봉) 2종으로 대체한다.
+# project_baseline 시드는 매핑 전환(후속 로직 태스크) 전까지 남겨둔다 — 이 태스크는 새 2종 추가만.
 # ---------------------------------------------------------------------------
 
 TEMPLATE_SEEDS: list[dict] = [
@@ -518,6 +681,100 @@ up: []
 - [[stem]] — 관계 이유
 """,
     },
+    {
+        # AXKG-SPEC-010 §4 / AXKG-SPEC-014 — project 팬아웃 원본요약(main, baseline/).
+        # destination project→key 매핑으로 main_document에 주입된다. document_type=baseline.
+        "key": "project_source_summary",
+        "name": "Project Source Summary",
+        "body": """---
+type: baseline
+title: ""
+aliases: []
+tags: []
+up: []
+---
+
+# {title}
+
+## 요구 개요
+
+<!-- 이 회사가 전체적으로 뭘 원하나 — docx 요구의 전체 그림을 몇 문장으로. -->
+
+## 기능 목록
+
+<!-- 추출된 기능 N개를 각각 기능정의서 stem으로 링크(baseline↔spec 그래프 연결).
+     빈 [[]]는 금지 — 실제 팬아웃되는 기능만 남긴다. 요구 1항목 = 기능정의서 1장. -->
+- [[기능-stem]] — 이 기능이 무엇인지 한 줄
+
+## 원본 맥락
+
+<!-- 이 요구가 담긴 docx의 배경 요지(어떤 회사가 왜 요청했나). -->
+
+## 연결
+
+<!-- origin 첨부 원본·기능 spec 링크. 미사용 불릿은 삭제. -->
+- [[stem]] — 관계 이유
+""",
+    },
+    {
+        # AXKG-SPEC-010 §4 / AXKG-SPEC-014 — project 팬아웃 기능정의서(파생, spec/).
+        # destination 매핑 없이 문서화③ 조립 시 고정 동봉으로 주입되고, derived_suggestions[]의
+        # create_feature_spec/supplement_existing_feature로 산출된다. document_type=feature_spec.
+        # 요청부서·요청 이력 필드는 두지 않는다(기능 dedup, 부서 무관 — AXKG-DEC-007).
+        "key": "project_feature_spec",
+        "name": "Project Feature Spec",
+        "body": """---
+type: feature_spec
+title: ""                 # 기능명. 명사구 15자 이내
+aliases: []               # stem resolution/역링크용 (시드 공통)
+tags: []
+up: []                    # 계보 링크 — 회사 원본요약을 up으로
+feature_id: ""            # {corp}-F-NN
+corp: ""
+status: draft             # draft|reviewing|confirmed
+priority: ""              # high|mid|low
+---
+
+# {기능명}
+
+> 한 줄 정의: "누가 / 무엇을 하면 / 무엇을 얻는다" 1문장. 형용사·감상 금지.
+
+## 1. 요구 배경
+- **현재 불편(as-is)**: 지금 뭐가 문제인지 2~3문장. docx 원문 표현을 최소 1개 큰따옴표 인용.
+- **필요 이유**: 이 기능이 그 불편을 어떻게 없애는지 1문장.
+
+## 2. 기능 정의
+- **핵심 동작**: 동사로 시작하는 불릿 3~5개. 각 불릿은 시스템이 하는 일 1개. 추상어("잘","효율적으로") 금지.
+
+## 3. 유저 플로우 (반드시 표, 케이스별)
+정상 1건 + 예외/대안 최소 1건.
+
+| 케이스 | 행동 (사용자가 한다) | 과정 (시스템이 처리) | 결과 (산출물) |
+|---|---|---|---|
+| 정상 |  |  |  |
+| 예외 |  |  |  |
+
+## 4. 예시 (최소 2개, 실제 문장 인용)
+- **입력**: docx의 실제 사용자 문장을 큰따옴표로.
+- **기대 출력**: 그 입력에 시스템이 내놔야 할 결과.
+
+## 5. 상세 요구 (번호 목록, "~해야 한다")
+1. …해야 한다.
+
+## 6. 다루는 데이터 (해당 시)
+- 입력/저장/출력 데이터 종류. 없으면 "해당 없음".
+
+## 7. 수용 기준 (체크박스 최소 3개, 참/거짓 판정 가능)
+- [ ] …
+- [ ] …
+- [ ] …
+
+## 8. 연결
+<!-- 그래프 엣지는 본문 [[]]가 단일 소스(AXKG-SPEC-005). up:에 넣은 stem은 여기 본문에도. 빈 [[]] 금지. -->
+- [[{corp}-원본요약]] — 이 기능이 나온 회사 요구 원본
+- [[graph-chat]] — (해당 시) ax-graph 기존 역량 재사용
+""",
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -586,6 +843,30 @@ TASK_DEFINITION_SEEDS: list[dict] = [
         "template_key": None,
         # 전역 기본 max_turns=3인데 chat만 더 많은 turn이 필요(SPEC-007 Rule).
         "default_provider_options": {"max_turns": 6},
+    },
+    {
+        # plan-then-fanout ① (AXKG-DEC-008/WORK-012): docx→원본요약+plan. 가벼운 산출이나
+        # 가이드 Read 턴 여유로 문서화와 동일 max_turns 12/timeout 600을 준다.
+        "key": "plan_project",
+        "display_name": "프로젝트 plan 산출",
+        "description": "plan-then-fanout ①: docx→원본요약+기능목록(plan) (AXKG-DEC-008)",
+        "handler_kind": "plan_project",
+        "prompt_key": "plan_project",
+        "template_key": None,
+        "default_provider_options": {"max_turns": 12},
+        "default_options": {"timeout_sec": 600},
+    },
+    {
+        # plan-then-fanout ② (AXKG-DEC-008/WORK-012): 기능 1개 생성. 작은 출력이라 600초로 충분,
+        # 병렬·기능별 재시도로 단일-task 타임아웃/거대출력 파싱실패를 해소한다.
+        "key": "generate_feature_spec",
+        "display_name": "기능정의서 생성",
+        "description": "plan-then-fanout ②: plan 1항목→기능정의서 1장 (AXKG-DEC-008)",
+        "handler_kind": "feature_spec",
+        "prompt_key": "generate_feature_spec",
+        "template_key": None,
+        "default_provider_options": {"max_turns": 12},
+        "default_options": {"timeout_sec": 600},
     },
 ]
 

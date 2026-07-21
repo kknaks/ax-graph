@@ -18,7 +18,16 @@ SEED_EMAIL = "kknaks@medisolveai.com"
 SEED_PASSWORD = "1234"
 # concept은 파생지식 전용 뼈대 — destination 매핑이 아니라 문서화③ 조립에 고정 동봉되지만
 # document_templates 시드로 관리된다(PLAN-009-T-027, SPEC-011 §4 Layer Taxonomy).
-SEED_KEYS = {"reference", "permanent", "project_baseline", "concept"}
+# project 팬아웃 2종(project_source_summary=원본요약 main, project_feature_spec=기능정의서 파생)도
+# 시드로 관리된다(AXKG-SPEC-010/014, WP11). project_baseline은 매핑 전환 후에도 시드로 존치.
+SEED_KEYS = {
+    "reference",
+    "permanent",
+    "project_baseline",
+    "concept",
+    "project_source_summary",
+    "project_feature_spec",
+}
 KEY = "project_baseline"
 
 

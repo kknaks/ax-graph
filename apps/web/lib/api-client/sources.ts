@@ -148,8 +148,11 @@ export const SOURCE_CASE_MESSAGES: Record<string, string> = {
   DUPLICATE_SOURCE: "이미 받은 URL입니다. 기존 항목에 연결했습니다.",
   SLACK_METADATA_MISSING: "Slack 메시지 정보를 일부 저장하지 못했습니다.",
   MANUAL_NOTE_TOO_LONG: "메모는 2000자 이하로 입력해 주세요.",
-  // md 업로드 intake (SPEC-003 §4 Case Matrix · WORK-010). .md 아닌 파일 거부.
-  UNSUPPORTED_UPLOAD_TYPE: "md 파일만 업로드할 수 있습니다.",
+  // md·docx 업로드 intake (SPEC-003 §4 Case Matrix · WORK-010/011). 그 외 형식 거부.
+  UNSUPPORTED_UPLOAD_TYPE: "md 또는 docx 파일만 업로드할 수 있습니다.",
+  // 업로드 크기/빈 본문 거부 (BE create_upload — SPEC-003/014).
+  UPLOAD_TOO_LARGE: "업로드 파일이 너무 큽니다(최대 1MB).",
+  EMPTY_UPLOAD_TEXT: "업로드한 파일 본문이 비어 있습니다.",
   COLLECTION_RETRY_NOT_ALLOWED: "현재 상태에서는 요약을 재시도할 수 없습니다.",
   // 요약 피드백 / 분류 게이트 진입 (T-015 개정본 · BE T-016 병렬). 최종 코드는 BE 구현과 정합, 없으면 fallback.
   SUMMARY_FEEDBACK_NOT_ALLOWED: "요약이 완료된 항목에만 피드백할 수 있습니다.",
@@ -211,21 +214,26 @@ export function createManualSource(
   });
 }
 
-/** v1 업로드 허용 확장자 (SPEC-003 Validation · WORK-010). */
-export const UPLOAD_ACCEPT_EXT = ".md";
+/** v1 업로드 허용 확장자 (SPEC-003 Validation · WORK-010/011). md=본문 직행, docx=텍스트 추출(SPEC-014). */
+export const UPLOAD_ACCEPT_EXTS = [".md", ".docx"] as const;
+/** <input accept> 속성값 (`.md,.docx`). */
+export const UPLOAD_ACCEPT_ATTR = UPLOAD_ACCEPT_EXTS.join(",");
 
-/** 클라 사전 검증 — 확장자가 `.md`인지(대소문자 무시). 서버도 UNSUPPORTED_UPLOAD_TYPE 로 방어. */
+/** 클라 사전 검증 — 확장자가 허용 목록(`.md`·`.docx`)인지(대소문자 무시). 서버도 UNSUPPORTED_UPLOAD_TYPE 로 방어. */
 export function isSupportedUploadFile(file: File): boolean {
-  return file.name.toLowerCase().endsWith(UPLOAD_ACCEPT_EXT);
+  const lower = file.name.toLowerCase();
+  return UPLOAD_ACCEPT_EXTS.some((ext) => lower.endsWith(ext));
 }
 
-/** POST /sources/upload — md 파일 업로드 → source_channel=upload source 를 received 로 저장 (U-3 · WORK-010).
- * multipart/form-data(file). v1은 `.md`만 허용하고 그 외는 서버가 UNSUPPORTED_UPLOAD_TYPE(422)로 거부한다.
- * 업로드 md 본문 자체가 원문이 되어 URL 수집 없이 곧 요약 입력이 된다(fallback 아님).
- * endpoint/필드명 최종 형태는 BE 구현과 정합(SPEC-003 §7 OQ). */
-export function createUploadSource(file: File): Promise<Source> {
+/** POST /sources/upload — md·docx 파일 업로드 → source_channel=upload source 를 received 로 저장 (U-3 · WORK-010/011).
+ * multipart/form-data(file + 선택 note 메모). v1은 `.md`·`.docx`만 허용하고 그 외는 서버가
+ * UNSUPPORTED_UPLOAD_TYPE(422)로 거부한다. 업로드 본문 자체가 원문이 되어 URL 수집 없이 곧 요약 입력이
+ * 되고(fallback 아님), docx 는 본문 텍스트만 추출된다(SPEC-014). 메모(회사명 등)는 탭 무관 항상 요약
+ * 컨텍스트로 동반된다(SPEC-003 intake) — BE `note` Form 필드에 실어 보낸다. */
+export function createUploadSource(file: File, note?: string): Promise<Source> {
   const form = new FormData();
   form.append("file", file);
+  if (note && note.trim()) form.append("note", note.trim());
   return apiFetch<Source>("/sources/upload", { method: "POST", body: form });
 }
 
@@ -323,7 +331,10 @@ export interface ClassificationForm {
 export type SuggestionType =
   | "supplement_existing_concept"
   | "create_new_concept"
-  | "create_project_baseline";
+  | "create_project_baseline"
+  // 기업 프로젝트 팬아웃(SPEC-014 §4) — 원본요약(baseline) + 기능정의서 N(spec).
+  | "create_feature_spec"
+  | "supplement_existing_feature";
 export type ChangeKind = "create" | "modify";
 // AXKG-SPEC-004 SSOT: 액션은 create_markdown / overwrite_markdown 2종 (patch 없음, BE T-019 개명).
 export type FileAction = "create_markdown" | "overwrite_markdown";

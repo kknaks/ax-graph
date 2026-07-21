@@ -295,10 +295,12 @@ async def test_documentation_injects_connection_context_and_template(
 
 
 def test_destination_template_mapping() -> None:
+    # project → 원본요약(main) 템플릿. 기능정의서(project_feature_spec)는 파생 고정 동봉이라
+    # destination 매핑에 없다(AXKG-SPEC-014/010, WP11 Phase 3).
     assert DESTINATION_TEMPLATE_KEY == {
         "resource": "reference",
         "area": "permanent",
-        "project": "project_baseline",
+        "project": "project_source_summary",
     }
 
 

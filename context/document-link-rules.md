@@ -24,7 +24,7 @@
 
 | 필드 | 필수 | 규칙 |
 |---|---|---|
-| `type` | yes | `reference` / `permanent` / `concept` / `baseline` / `decision` / `spec` / `work` / `source` 중 하나. `product`라는 타입은 없다 |
+| `type` | yes | `reference` / `permanent` / `concept` / `baseline` / `feature_spec` / `decision` / `spec` / `work` / `source` 중 하나. `product`라는 타입은 없다. project 팬아웃은 원본요약=`baseline`(회사 원본요약), 기능정의서=`feature_spec`을 쓴다 |
 | `title` | yes | 문서 제목 |
 | `aliases` | 권장 | 사람이 찾을 별칭 목록 (`[[alias]]` resolve용). 링크 resolve는 stem→alias 순 |
 | `up` | 선택 | lineage upstream stem 목록 (`up: []` list 문법, 본문 링크 동반 필수) |
@@ -40,6 +40,16 @@
 - `type=source` 문서(raw source record)는 그래프 기본 노출에서 제외된다.
 - 같은 stem이 두 개 있을 수 없다(duplicate stem 거부). 새 문서 파일명은 스냅샷과 충돌하지 않게 정한다.
 - concept 문서의 경로 관례는 `permanent/concepts/*.md`다.
+
+## project 팬아웃 연결·차용 규약 (원본요약 ↔ 기능정의서)
+
+destination이 `project`면 산출물이 회사 프로젝트로 팬아웃된다(AXKG-SPEC-014). 원본요약(`projects/{corp}/baseline/`)과 기능정의서(`projects/{corp}/spec/`) 사이 연결은 다음 규약을 따른다.
+
+- **원본요약(baseline) → 기능정의서(spec)**: 원본요약 본문 `## 기능 목록`에서 추출된 각 기능을 `[[기능-spec-stem]]`으로 링크한다(baseline↔spec 그래프를 여는 단일 소스). 이 stem들은 같은 제안에서 함께 생성하는 파생(기능정의서) stem이므로 스냅샷에 없어도 링크할 수 있다(위 대원칙 예외).
+- **기능정의서(spec) → 원본요약(baseline)**: 기능정의서 frontmatter `up:`에 **회사 원본요약 stem**을 넣고(계보 upstream), 본문 `## 연결`에도 같은 stem을 `[[{corp}-원본요약]]`으로 둔다 — `up:`에 넣은 stem은 반드시 본문 `[[ ]]`에도 있어야 한다는 대원칙을 그대로 따른다.
+- **기존 역량 차용 링크**: 기능정의서 본문 `## 연결`에는 원본요약 링크에 더해 ax-graph 기존 역량/문서를 차용 링크(`[[graph-chat]]` 등, 연결 후보 컨텍스트로 제안)로 둔다 — 주입된 documents index 스냅샷 안의 대상만 링크한다(스냅샷 밖은 `BROKEN_WIKILINK`).
+- **빈 `[[ ]]` 금지**: 본문 `[[ ]]`가 그래프 엣지의 단일 소스이므로 채우지 않은 자리표시 `[[ ]]`를 남기지 않는다 — 실제로 링크할 대상이 없으면 그 불릿을 삭제한다.
+- **기능 dedup 시**: 같은 corp 기존 기능정의서를 `supplement_existing_feature`로 보강할 때도 기존 문서의 `up:`·`## 연결` 링크(원본요약·차용 링크)를 보존하며 새 원본요약 링크를 합류시킨다(기존 링크를 갈아엎지 않는다).
 
 ## 연결의 질
 

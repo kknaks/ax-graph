@@ -1,6 +1,8 @@
-// Direct Inbox 모달 (AXKG-SPEC-003 U-3) — 같은 모달에서 두 입력 방식:
-//  ① URL + 메모 → POST /sources/manual (source_channel=manual)
-//  ② md 파일 업로드 → POST /sources/upload (source_channel=upload, WORK-010)
+// Direct Inbox 모달 (AXKG-SPEC-003 U-3 · SPEC-014 intake) — 탭형 intake:
+//  [url]  URL + 메모 → POST /sources/manual (source_channel=manual)
+//  [md]   .md 파일 업로드 → POST /sources/upload (source_channel=upload)
+//  [docx] .docx 파일 업로드 → POST /sources/upload (docx 텍스트 추출, SPEC-014 팬아웃 입력)
+// 메모(회사명 등)는 탭 무관 항상 표시 · 항상 요약 컨텍스트로 동반된다(SPEC-003 intake, SPEC-014 corp 바인딩).
 // 상태: 닫힘/열림/제출 중/제출 실패/중복 URL/파일 형식 오류. 카피/레이아웃은 21-html 시안 기준.
 // 이 표면은 admin 전용(소스 Inbox 라우트 가드로 보호) — 여기서 별도 권한 분기는 하지 않는다.
 "use client";
@@ -9,14 +11,20 @@ import { useEffect, useRef, useState } from "react";
 import {
   createManualSource,
   createUploadSource,
-  isSupportedUploadFile,
   sourceCaseMessage,
-  UPLOAD_ACCEPT_EXT,
   type Source,
 } from "@/lib/api-client/sources";
 
 const NOTE_MAX = 2000;
-const UNSUPPORTED_UPLOAD_MESSAGE = "md 파일만 업로드할 수 있습니다.";
+
+// 탭 정의 — url(수동 URL) / md / docx. md·docx 는 확장자만 다르고 같은 업로드 경로.
+type IntakeTab = "url" | "md" | "docx";
+const TABS: { key: IntakeTab; label: string; ext?: string }[] = [
+  { key: "url", label: "URL" },
+  { key: "md", label: "md 파일", ext: ".md" },
+  { key: "docx", label: "docx 파일", ext: ".docx" },
+];
+const UNSUPPORTED_UPLOAD_MESSAGE = "선택한 탭 형식의 파일만 업로드할 수 있습니다.";
 
 export function DirectInboxModal({
   open,
@@ -28,9 +36,11 @@ export function DirectInboxModal({
   /** 저장 성공 시 새 Source 를 부모에 전달 (목록 갱신·선택). duplicate 는 error 로 처리. */
   onCreated: (source: Source) => void;
 }) {
+  const [tab, setTab] = useState<IntakeTab>("url");
   const [url, setUrl] = useState("");
+  // 메모(회사명 등) — 탭 공통, 전환해도 유지한다(SPEC-014 corp 바인딩 컨텍스트).
   const [note, setNote] = useState("");
-  // md 업로드 대상 파일 (선택 시 URL 대신 업로드 경로로 제출). WORK-010.
+  // 업로드 대상 파일(md·docx 탭). 탭 전환 시 초기화.
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +49,7 @@ export function DirectInboxModal({
   // 열릴 때마다 입력/에러 초기화
   useEffect(() => {
     if (open) {
+      setTab("url");
       setUrl("");
       setNote("");
       setFile(null);
@@ -59,18 +70,31 @@ export function DirectInboxModal({
 
   if (!open) return null;
 
+  const activeTab = TABS.find((t) => t.key === tab)!;
+  const isUpload = tab === "md" || tab === "docx";
   const trimmedUrl = url.trim();
   const noteTooLong = note.length > NOTE_MAX;
-  // 파일이 선택되면 업로드 경로, 아니면 URL 경로. 둘 중 하나는 유효해야 제출 가능.
   const canSubmit =
     !submitting &&
-    (file != null || (trimmedUrl.length > 0 && !noteTooLong));
+    !noteTooLong &&
+    (isUpload ? file != null : trimmedUrl.length > 0);
 
-  // 파일 선택 → 클라 사전 검증(.md). 형식 오류면 파일을 담지 않고 오류 표시(SPEC-003 U-3).
+  // 탭 전환 — 파일/URL/에러는 리셋, 메모(회사명 등)는 유지.
+  function switchTab(next: IntakeTab) {
+    if (next === tab) return;
+    setTab(next);
+    setFile(null);
+    setError(null);
+    if (next === "url") setUrl("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  // 파일 선택 → 클라 사전 검증(활성 탭 확장자). 형식 오류면 파일을 담지 않고 오류 표시.
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = e.target.files?.[0] ?? null;
     if (!picked) return;
-    if (!isSupportedUploadFile(picked)) {
+    const ext = activeTab.ext;
+    if (ext && !picked.name.toLowerCase().endsWith(ext)) {
       setFile(null);
       setError(UNSUPPORTED_UPLOAD_MESSAGE);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -91,11 +115,11 @@ export function DirectInboxModal({
     setError(null);
     try {
       let created: Source;
-      if (file) {
-        // ② md 업로드 — 서버도 UNSUPPORTED_UPLOAD_TYPE(422)로 방어.
-        created = await createUploadSource(file);
+      if (isUpload && file) {
+        // md·docx 업로드 — 메모(회사명 등)를 note 로 동반. 서버도 UNSUPPORTED_UPLOAD_TYPE(422)로 방어.
+        created = await createUploadSource(file, note);
       } else {
-        // ① URL 입력 — 클라이언트 사전 검증 (SPEC-003 Validation: http/https URL)
+        // URL 입력 — 클라이언트 사전 검증 (SPEC-003 Validation: http/https URL)
         if (!/^https?:\/\/.+/i.test(trimmedUrl)) {
           setError("올바른 URL이 아닙니다.");
           setSubmitting(false);
@@ -152,35 +176,142 @@ export function DirectInboxModal({
           </button>
         </div>
 
-        <label htmlFor="inbox-url" className="text-[11px] font-medium text-muted-foreground">
-          URL
-        </label>
-        <input
-          id="inbox-url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSubmit();
-          }}
-          autoFocus
-          disabled={file != null}
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-50"
-          placeholder="https://…"
-        />
+        {/* 탭 스위처 — url · md · docx (SPEC-003 U-3 탭형 intake) */}
+        <div
+          role="tablist"
+          aria-label="intake 방식"
+          className="mb-3 inline-flex w-full rounded-md border border-border bg-secondary/40 p-0.5"
+        >
+          {TABS.map((t) => {
+            const on = t.key === tab;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                onClick={() => switchTab(t.key)}
+                className={
+                  on
+                    ? "flex-1 rounded-[5px] bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-sm"
+                    : "flex-1 rounded-[5px] px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+                }
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
 
+        {/* URL 탭 입력 */}
+        {tab === "url" && (
+          <>
+            <label htmlFor="inbox-url" className="text-[11px] font-medium text-muted-foreground">
+              URL
+            </label>
+            <input
+              id="inbox-url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSubmit();
+              }}
+              autoFocus
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"
+              placeholder="https://…"
+            />
+          </>
+        )}
+
+        {/* md·docx 업로드 탭 */}
+        {isUpload && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={activeTab.ext}
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            {file ? (
+              <div className="flex items-center gap-2 rounded-md border border-input bg-secondary/40 px-3 py-2">
+                <svg
+                  className="h-4 w-4 shrink-0 text-muted-foreground"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
+                  <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+                </svg>
+                <span className="min-w-0 flex-1 truncate text-sm">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={clearFile}
+                  aria-label="파일 선택 취소"
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-secondary"
+                >
+                  <svg
+                    className="h-3.5 w-3.5"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-input px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary/60"
+              >
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <path d="M17 8l-5-5-5 5" />
+                  <path d="M12 3v12" />
+                </svg>
+                {activeTab.ext} 파일 업로드
+              </button>
+            )}
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              허용 형식: {activeTab.ext} 파일만
+              {tab === "docx" && " · 본문 텍스트만 추출됩니다"}
+            </p>
+          </>
+        )}
+
+        {/* 메모(회사명 등) — 탭 공통, 항상 표시. 요약 컨텍스트로 동반된다(SPEC-003/014). */}
         <label
           htmlFor="inbox-note"
           className="mt-3 block text-[11px] font-medium text-muted-foreground"
         >
-          메모 (선택 · 2000자 이하)
+          메모 (회사명 등 · 선택 · 2000자 이하)
         </label>
         <textarea
           id="inbox-note"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          disabled={file != null}
-          className="mt-1 h-16 w-full resize-none rounded-md border border-input bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-50"
-          placeholder="왜 담아두는지 한 줄"
+          className="mt-1 h-16 w-full resize-none rounded-md border border-input bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"
+          placeholder="회사명 등 — 요약·분류에 함께 참고됩니다 (예: 더에스씨)"
         />
         <div className="mt-1 flex items-center justify-between">
           <span
@@ -191,83 +322,6 @@ export function DirectInboxModal({
             {note.length} / {NOTE_MAX}
           </span>
         </div>
-
-        {/* 구분선 — URL 대신 md 파일 업로드 (WORK-010 U-3) */}
-        <div className="my-3 flex items-center gap-2 text-[10px] text-muted-foreground">
-          <span className="h-px flex-1 bg-border" />
-          또는
-          <span className="h-px flex-1 bg-border" />
-        </div>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={UPLOAD_ACCEPT_EXT}
-          onChange={handleFileChange}
-          className="hidden"
-        />
-        {file ? (
-          <div className="flex items-center gap-2 rounded-md border border-input bg-secondary/40 px-3 py-2">
-            <svg
-              className="h-4 w-4 shrink-0 text-muted-foreground"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
-              <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-            </svg>
-            <span className="min-w-0 flex-1 truncate text-sm">{file.name}</span>
-            <button
-              type="button"
-              onClick={clearFile}
-              aria-label="파일 선택 취소"
-              className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-secondary"
-            >
-              <svg
-                className="h-3.5 w-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden
-              >
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-input px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary/60"
-          >
-            <svg
-              className="h-4 w-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <path d="M17 8l-5-5-5 5" />
-              <path d="M12 3v12" />
-            </svg>
-            md 파일 업로드
-          </button>
-        )}
-        <p className="mt-1 text-[10px] text-muted-foreground">
-          허용 형식: {UPLOAD_ACCEPT_EXT} 파일만
-        </p>
 
         {error && (
           <p

@@ -21,6 +21,8 @@ from axkg.services.classification_gate_execution import execute_classification_g
 from axkg.services.documentation_gate_execution import execute_documentation_gate
 from axkg.services.gates import (
     GATE_KIND_DOCUMENTATION,
+    PLAN_PROJECT_TASK,
+    FeatureRetryNotAllowedError,
     FeedbackTooShortError,
     GateAlreadyApprovedError,
     GateNotFoundError,
@@ -30,6 +32,10 @@ from axkg.services.gates import (
     NotThisDestinationReasonMissingError,
     ReclassificationNotAllowedError,
     StaleGateVersionError,
+)
+from axkg.services.plan_fanout_execution import (
+    execute_feature_retry,
+    execute_plan_then_fanout,
 )
 from axkg.workers.apply_executor import ApplyValidationError
 
@@ -86,11 +92,14 @@ def _schedule_execution(
     client = _open_kknaks_client(request)
     if client is None:
         return
-    executor = (
-        execute_documentation_gate
-        if result.gate.gate_kind == GATE_KIND_DOCUMENTATION
-        else execute_classification_gate
-    )
+    # project 문서화는 plan-then-fanout 오케스트레이터로 라우팅한다(AXKG-DEC-008/WORK-012):
+    # plan_project task 하나가 아니라 plan→기능 task 병렬→fan-in 조립까지 한 실행에서 돈다.
+    if result.ai_task.task_type == PLAN_PROJECT_TASK:
+        executor = execute_plan_then_fanout
+    elif result.gate.gate_kind == GATE_KIND_DOCUMENTATION:
+        executor = execute_documentation_gate
+    else:
+        executor = execute_classification_gate
     background.add_task(
         executor,
         result.ai_task.id,
@@ -247,4 +256,62 @@ async def retry_gate(
     if _open_kknaks_client(request) is not None:
         await session.commit()
         _schedule_execution(request, background, result)
+    return await _gate_response(service, result.gate)
+
+
+@router.get("/{gate_id}/fanout")
+async def gate_fanout_progress(
+    gate_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """plan-then-fanout 진행률(N개 중 M완료·부분 실패) 조회 (AXKG-DEC-008/WORK-012, P4).
+
+    project 문서화 게이트가 아니거나 plan 미산출이면 progress=null. UI는 후속.
+    """
+    service = GateService(session)
+    try:
+        progress = await service.get_fanout_progress(gate_id)
+    except GateNotFoundError:
+        raise _not_found(gate_id)
+    return {"gate_id": str(gate_id), "progress": progress}
+
+
+@router.post("/{gate_id}/features/{seq}/retry", response_model=GateResponse)
+async def retry_feature(
+    gate_id: uuid.UUID,
+    seq: int,
+    request: Request,
+    background: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> GateResponse:
+    """실패한 기능정의서(seq) 하나만 재시도한다 (plan-then-fanout, WORK-012 부분 실패 복구).
+
+    11개 통째 재생성이 아니라 그 기능 task만 재실행하고 끝나면 revision을 다시 조립한다.
+    """
+    service = GateService(session)
+    try:
+        result = await service.retry_feature(gate_id, seq)
+    except GateNotFoundError:
+        raise _not_found(gate_id)
+    except GateAlreadyApprovedError:
+        raise _error(
+            409,
+            "GATE_ALREADY_APPROVED",
+            "승인된 게이트는 변경할 수 없습니다.",
+        )
+    except FeatureRetryNotAllowedError:
+        raise _error(
+            409, "FEATURE_RETRY_NOT_ALLOWED", "재시도할 실패한 기능을 찾지 못했습니다."
+        )
+    client = _open_kknaks_client(request)
+    if client is not None:
+        await session.commit()
+        background.add_task(
+            execute_feature_retry,
+            result.ai_task.id,
+            result.gate.id,
+            result.revision.id,
+            client=client,
+            session_factory=_session_factory(request),
+        )
     return await _gate_response(service, result.gate)

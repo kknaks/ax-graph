@@ -204,6 +204,9 @@ const SUGGESTION_LABELS: Record<string, string> = {
   supplement_existing_concept: "기존 개념 보충",
   create_new_concept: "새 개념 생성",
   create_project_baseline: "프로젝트 baseline",
+  // 기업 프로젝트 팬아웃(SPEC-014 U-4) — 원본요약(main) + 기능정의서 N(derived).
+  create_feature_spec: "기능정의서 생성",
+  supplement_existing_feature: "기능정의서 보강",
 };
 
 // ③ 초안이 채택한 연결 edge_type 라벨 (SPEC-005 document-link-graph-contract).

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -18,7 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from axkg.dto.ai import AiTaskDTO
 from axkg.dto.source import SourceDTO
 from axkg.dto.source_material import SourceMaterial
+from axkg.integrations.source_collection.docx_text import (
+    DOCX_EXTENSION,
+    DocxExtractError,
+    extract_docx_text,
+    is_docx_filename,
+)
 from axkg.models.base import utcnow
+from axkg.services.ai.source_summary import INTAKE_NOTE_KEY
+from axkg.services.project_scaffold import origin_staging_path
+from axkg.storage.markdown_root import MarkdownRoot
 from axkg.repositories.ai_task_definitions import AiTaskDefinitionRepository
 from axkg.repositories.ai_tasks import AiTaskRepository
 from axkg.repositories.settings import SettingRepository
@@ -28,8 +38,10 @@ from axkg.services.ai.resolution import resolve_execution_config
 SUMMARY_TASK_TYPE = "collect_source_summary"
 AI_PROVIDER_SETTINGS_KEY = "ai_provider"
 MAX_MANUAL_NOTE_LENGTH = 2000
-# md 업로드 v1 허용 확장자 (AXKG-SPEC-003 §4 Validation, WORK-010).
+# 업로드 v1 허용 확장자 (AXKG-SPEC-003 §4 Validation, WORK-010/011). md=본문 그대로,
+# docx=본문 텍스트만 추출(표/이미지 파싱 계약 없음, AXKG-DEC-007 D5 · SPEC-012 docx_text).
 UPLOAD_ALLOWED_EXTENSION = ".md"
+UPLOAD_ALLOWED_EXTENSIONS = (".md", DOCX_EXTENSION)
 # 업로드 파일 크기 상한 — 구현 기본값(AXKG-SPEC-003 §7 OQ). 1 MiB.
 # md는 텍스트라 1 MiB면 장문 노트/아티클도 충분하고, 요약 입력·메모리·남용을 유계로 둔다.
 MAX_UPLOAD_SIZE_BYTES = 1 * 1024 * 1024
@@ -300,31 +312,61 @@ class SourceService:
         filename: str | None,
         content: bytes,
         submitted_by: uuid.UUID | None,
+        note: str | None = None,
+        markdown_root: MarkdownRoot | None = None,
     ) -> SourceDTO:
-        """md 파일 업로드 intake (S-5) — `source_channel=upload` source를 received로 생성한다.
+        """파일 업로드 intake (S-5) — `source_channel=upload` source를 received로 생성한다.
 
-        v1은 확장자 `.md`만 허용한다. 그 외 확장자/디코딩 불가(텍스트 아님)는
-        `UnsupportedUploadTypeError`로 거부하고 **source row를 만들지 않는다**(intake validation,
-        수집 실패와 무관 — SPEC-012 adapter 경로를 타지 않는다). 크기 상한 초과는
-        `UploadTooLargeError`, 본문이 비면 `EmptyUploadTextError`(SPEC-003 §4 upload raw_text 필수).
+        v1 허용 확장자: `.md`(본문 그대로)·`.docx`(본문 텍스트만 추출, WP11 Phase 2). 그 외
+        확장자/디코딩 불가/손상 docx는 `UnsupportedUploadTypeError`로 거부하고 **source row를
+        만들지 않는다**(intake validation, 수집 실패와 무관 — SPEC-012 adapter 경로를 타지 않는다).
+        크기 상한 초과는 `UploadTooLargeError`, 본문이 비면 `EmptyUploadTextError`.
 
-        업로드 md 본문 자체가 원문이므로 URL 수집 없이 `raw_text`가 곧 요약 입력이 된다
-        (fallback 아님·원문 그 자체). **md frontmatter는 strip하지 않고 본문 그대로 보존한다**
-        (구현 기본값, SPEC-003 §7 OQ): intake를 무손실·무파서로 유지하고, frontmatter의
-        메타(제목/태그 등)도 요약①이 함께 정제하게 둔다. BOM만 제거한다.
+        - **md**: frontmatter는 strip하지 않고 본문 그대로 보존한다(무손실·무파서, BOM만 제거).
+          요약①이 frontmatter 메타(제목/태그)도 함께 정제한다.
+        - **docx**: `word/document.xml`의 문단 텍스트만 추출해 raw_text에 담는다(표/이미지 파싱
+          계약 없음, AXKG-DEC-007 D5). 기능별 구조화는 요약①이 담당한다. 첨부 docx **원본 raw**는
+          `markdown_root`가 있으면 origin staging에 best-effort 보관하고(그래프 노드 아님), corp
+          매칭·게이트 승인 시 `projects/{corp}/origin/`으로 finalize된다(Phase 4).
+
+        업로드 본문 자체가 원문이라 URL 수집 없이 raw_text가 곧 요약 입력이 된다(fallback 아님).
+        `note`(intake 메모, 회사명 등)가 있으면 metadata에 저장돼 탭 무관 항상 요약 컨텍스트로
+        동반된다(SPEC-003, WP11 Phase 2). Phase 4 corp 바인딩이 이 메모를 읽는다.
         """
         name = (filename or "").strip()
-        if not name.lower().endswith(UPLOAD_ALLOWED_EXTENSION):
+        if not name.lower().endswith(UPLOAD_ALLOWED_EXTENSIONS):
             raise UnsupportedUploadTypeError
         if len(content) > MAX_UPLOAD_SIZE_BYTES:
             raise UploadTooLargeError
-        try:
-            text = content.decode("utf-8-sig")
-        except UnicodeDecodeError as exc:
-            # 텍스트로 디코딩되지 않으면 .md 확장자여도 유효한 md가 아니다.
-            raise UnsupportedUploadTypeError from exc
+
+        if is_docx_filename(name):
+            try:
+                text = extract_docx_text(content)
+            except DocxExtractError as exc:
+                # .docx 확장자여도 zip/document.xml이 아니면 유효한 docx가 아니다.
+                raise UnsupportedUploadTypeError from exc
+        else:
+            try:
+                text = content.decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                # 텍스트로 디코딩되지 않으면 .md 확장자여도 유효한 md가 아니다.
+                raise UnsupportedUploadTypeError from exc
         if not text.strip():
             raise EmptyUploadTextError
+
+        metadata: dict[str, Any] = {}
+        clean_note = (note or "").strip()
+        if clean_note:
+            if len(clean_note) > MAX_MANUAL_NOTE_LENGTH:
+                raise ManualNoteTooLongError
+            metadata[INTAKE_NOTE_KEY] = clean_note
+
+        # origin 첨부 원본 raw staging (docx만, best-effort). corp 미확정 단계라 임시 경로에 둔다.
+        if is_docx_filename(name) and markdown_root is not None and content:
+            staged = self._stage_origin(markdown_root, name, content)
+            if staged is not None:
+                metadata["origin"] = staged
+
         return await self._sources.create(
             source_url=None,
             normalized_url=None,
@@ -333,7 +375,27 @@ class SourceService:
             submitted_at=utcnow(),
             raw_text=text,
             original_filename=name,
+            metadata=metadata or None,
         )
+
+    @staticmethod
+    def _stage_origin(
+        markdown_root: MarkdownRoot, filename: str, content: bytes
+    ) -> dict[str, str] | None:
+        """origin 첨부 원본을 임시 staging에 raw로 쓴다(best-effort). 실패/미마운트면 None.
+
+        root가 아직 마운트되지 않았으면(테스트/오프라인) 조용히 건너뛴다 — origin은 감사용
+        부가물이라 요약/문서화 흐름을 막지 않는다. staging 토큰은 충돌 없는 uuid다.
+        """
+        if not markdown_root.root.is_dir():
+            return None
+        token = str(uuid.uuid4())
+        rel = origin_staging_path(token, filename)
+        try:
+            markdown_root.write_bytes(rel, content)
+        except OSError:
+            return None
+        return {"filename": PurePosixPath(filename.strip()).name, "staged_rel": rel}
 
     async def _handle_duplicate(
         self,

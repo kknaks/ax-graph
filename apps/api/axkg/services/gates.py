@@ -36,6 +36,15 @@ from axkg.config import settings
 from axkg.services.ai.classification_gate import empty_classification_payload
 from axkg.services.ai.documentation_gate import empty_documentation_payload
 from axkg.services.ai.resolution import resolve_execution_config
+from axkg.services.ai.feature_spec import PLAN_ITEM_KEY
+from axkg.services.ai.plan_project import PLAN_OUTPUT_KEY
+from axkg.services.ai.source_summary import INTAKE_NOTE_KEY
+from axkg.services.plan_fanout_execution import (
+    FEATURE_TASK_TYPE,
+    _latest_by_seq,
+    compute_fanout_progress,
+)
+from axkg.services.project_scaffold import list_project_corps, resolve_corp
 from axkg.services.summary_archive import write_summary_archive
 from axkg.storage.markdown_root import MarkdownRoot
 from axkg.workers.apply_executor import ApplyExecutor, ApplyValidationError
@@ -46,6 +55,10 @@ GENERATE_TASK = "generate_classification_gate"
 REGENERATE_TASK = "regenerate_classification_gate"
 GENERATE_DOC_TASK = "generate_documentation_gate"
 REGENERATE_DOC_TASK = "regenerate_documentation_gate"
+# plan-then-fanout (AXKG-DEC-008/WORK-012): project 문서화는 단일 task 대신 plan_project로
+# 시작한다(→ fan-out 기능 task → fan-in 조립). generate/regenerate 모두 plan_project를 쓴다.
+PLAN_PROJECT_TASK = "plan_project"
+FEATURE_SPEC_TASK = "generate_feature_spec"
 CLASSIFICATION_FORM_VERSION = "classification.v1"
 DOCUMENTATION_FORM_VERSION = "documentation.v1"
 AI_PROVIDER_SETTINGS_KEY = "ai_provider"
@@ -58,6 +71,8 @@ _STALE_MARKDOWN_CAP = 8000
 
 # 승인 destination이 문서화 게이트로 이어지지 않는 종료 목적지(AXKG-SPEC-001 U-3).
 ARCHIVE_DESTINATION = "archive"
+# 회사 프로젝트 팬아웃 destination(AXKG-SPEC-014, WP11). corp 바인딩 대상.
+PROJECT_DESTINATION = "project"
 
 # 분류 파생 라벨(Inbox 큐 라벨) 매핑 — AXKG-SPEC-001 §Verification 매핑표가 SSOT.
 # DB에 저장하지 않는 파생값이다(sources.status + 분류 게이트 상태 조합).
@@ -145,6 +160,15 @@ class GateRetryNotAllowedError(Exception):
         super().__init__(f"retry not allowed: gate {gate_id} status={status}")
         self.gate_id = gate_id
         self.status = status
+
+
+class FeatureRetryNotAllowedError(Exception):
+    """기능 재시도 불가 — 대상 seq 기능 task가 없거나 failed가 아님 (plan-then-fanout, WORK-012)."""
+
+    def __init__(self, gate_id: uuid.UUID, seq: int) -> None:
+        super().__init__(f"feature retry not allowed: gate {gate_id} seq={seq}")
+        self.gate_id = gate_id
+        self.seq = seq
 
 
 class DraftMarkdownNotFoundError(Exception):
@@ -826,10 +850,12 @@ class GateService:
     async def _start_documentation_gate(
         self, gate: ApprovalGateDTO, source, destination_type: str
     ) -> GateTaskResult:
-        """문서화 게이트 첫 revision(drafting) + generate task 큐잉 → gate generating.
+        """문서화 게이트 첫 revision(drafting) + 생성 task 큐잉 → gate generating.
 
-        destination_type을 task.payload에 실어 보내 context builder가 destination→template
-        (resource→reference/area→permanent/project→project_baseline)을 선택하게 한다.
+        destination_type을 task.payload에 실어 보내 context builder가 destination→template을
+        선택하게 한다. **project는 plan-then-fanout**(AXKG-DEC-008): 단일 문서화 task 대신
+        plan_project task로 시작해 이후 기능 task 병렬 발주·fan-in 조립으로 이어진다(오케스트레이터
+        `execute_plan_then_fanout`). resource/area는 종전 단일 generate_documentation_gate.
         """
         version = await self._gates.next_version(gate.id)
         revision = await self._gates.create_revision(
@@ -839,13 +865,18 @@ class GateService:
             payload=empty_documentation_payload(source, destination_type),
             form_schema_version=DOCUMENTATION_FORM_VERSION,
         )
+        task_type = (
+            PLAN_PROJECT_TASK
+            if destination_type == PROJECT_DESTINATION
+            else GENERATE_DOC_TASK
+        )
         task = await self._enqueue_task(
-            GENERATE_DOC_TASK,
+            task_type,
             source_id=source.id,
             gate_id=gate.id,
             revision_id=revision.id,
             payload_kind="documentation",
-            extra_payload={"destination_type": destination_type},
+            extra_payload=self._documentation_extra_payload(destination_type, source),
         )
         revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
         gate = await self._gates.update_gate(
@@ -940,6 +971,98 @@ class GateService:
             raise GateNotFoundError(source_id)
         return source
 
+    def _documentation_extra_payload(self, destination_type: str, source) -> dict:
+        """문서화 task payload extra: destination_type + (project면) corp 바인딩 (WP11 Phase 4).
+
+        분류 project 확정 시 intake 메모(sources.metadata[intake_note])의 회사명을 기존
+        `projects/{corp}/`에 매칭해 corp를 payload에 싣는다 → context builder가 팬아웃 경로
+        (baseline/·spec/)를 조립한다. 매칭 프로젝트가 없으면 corp를 싣지 않아 팬아웃하지 않는다
+        (프로젝트 선행 생성 전제 — 자동 생성 금지, AXKG-DEC-007). MarkdownRoot 미마운트여도
+        조용히 skip한다(corp 없이 flat).
+        """
+        extra: dict = {"destination_type": destination_type}
+        if destination_type != PROJECT_DESTINATION:
+            return extra
+        memo = (source.metadata or {}).get(INTAKE_NOTE_KEY)
+        try:
+            corps = list_project_corps(MarkdownRoot(settings.axkg_markdown_root))
+        except OSError:
+            corps = []
+        corp = resolve_corp(memo, corps)
+        if corp:
+            extra["corp"] = corp
+        return extra
+
+    # ------------------------------------------------------------------
+    # plan-then-fanout — 진행률 + 기능 단위 재시도 (AXKG-DEC-008/WORK-012)
+    # ------------------------------------------------------------------
+
+    async def get_fanout_progress(self, gate_id: uuid.UUID) -> dict | None:
+        """project 문서화 게이트의 기능 생성 진행률(N개 중 M완료·부분 실패). plan 없으면 None.
+
+        상태 노출용(P4) — UI는 후속. plan_output(revision) + 기능 task 상태로 파생 계산한다.
+        """
+        gate = await self.get_gate(gate_id)
+        revision = await self.get_active_revision(gate)
+        if revision is None:
+            return None
+        plan_output = (revision.payload or {}).get(PLAN_OUTPUT_KEY)
+        if not plan_output:
+            return None
+        plan = plan_output.get("plan") or []
+        feature_tasks = await self._tasks.list_by_gate(gate_id, FEATURE_TASK_TYPE)
+        return compute_fanout_progress(plan, _latest_by_seq(feature_tasks))
+
+    async def retry_feature(self, gate_id: uuid.UUID, seq: int) -> GateTaskResult:
+        """실패한 기능정의서(seq) 하나만 재시도 큐잉한다(11개 통째 재생성 아님).
+
+        대상 seq의 최신 기능 task가 failed일 때만 허용한다. 실패 task는 불변 보존하고
+        retry_of_task_id로 연결된 새 queued task를 만든다(plan_item·corp payload 승계). 실행은
+        오케스트레이터 `execute_feature_retry`가 background로 돈다(끝나면 revision 재조립).
+        """
+        gate = await self.get_gate(gate_id)
+        if gate.status == "approved":
+            raise GateAlreadyApprovedError(gate_id)
+        revision = await self.get_active_revision(gate)
+        if revision is None:
+            raise FeatureRetryNotAllowedError(gate_id, seq)
+        feature_tasks = await self._tasks.list_by_gate(gate_id, FEATURE_TASK_TYPE)
+        latest = _latest_by_seq(feature_tasks)
+        target = latest.get(int(seq))
+        if target is None or target.status != "failed":
+            raise FeatureRetryNotAllowedError(gate_id, seq)
+
+        definition = await self._definitions.get_by_key(FEATURE_TASK_TYPE)
+        if definition is None or not definition.enabled:
+            raise LookupError(f"ai_task_definition missing: {FEATURE_TASK_TYPE}")
+        global_settings = await self._settings.get_value(AI_PROVIDER_SETTINGS_KEY)
+        config = resolve_execution_config(global_settings, definition)
+        # 실패 task payload에서 실행 재료만 승계(plan_item/stem/corp) — snapshot 잡음은 뺀다.
+        prior = target.payload or {}
+        payload = {
+            "kind": "feature_spec",
+            PLAN_ITEM_KEY: prior.get(PLAN_ITEM_KEY),
+            "source_summary_stem": prior.get("source_summary_stem"),
+            "corp": prior.get("corp"),
+            "destination_type": "project",
+        }
+        task = await self._tasks.create(
+            task_type=FEATURE_TASK_TYPE,
+            task_definition_id=definition.id,
+            provider=config.provider,
+            model=config.model,
+            options=config.options,
+            provider_options=config.provider_options,
+            source_id=target.source_id,
+            gate_id=gate_id,
+            revision_id=revision.id,
+            retry_of_task_id=target.id,
+            retry_count=target.retry_count + 1,
+            payload=payload,
+        )
+        gate = await self._gates.update_gate(gate_id, status="generating")
+        return GateTaskResult(gate, revision, task)
+
     async def _write_summary_archive(self, source) -> None:
         """요약 확정 시 active summary 버전을 요약 보관 md로 확정 생성한다(PLAN-009-T-014).
 
@@ -983,13 +1106,18 @@ class GateService:
         """
         if gate_kind == GATE_KIND_DOCUMENTATION:
             destination_type = source.destination_type or "resource"
+            # project는 plan-then-fanout(AXKG-DEC-008): 재생성/재시도도 plan_project로 시작해
+            # 다시 fan-out·fan-in한다(단일 task 재생성 아님). resource/area는 종전 단일 task.
+            is_project = destination_type == PROJECT_DESTINATION
             return {
-                "generate": GENERATE_DOC_TASK,
-                "regenerate": REGENERATE_DOC_TASK,
+                "generate": PLAN_PROJECT_TASK if is_project else GENERATE_DOC_TASK,
+                "regenerate": PLAN_PROJECT_TASK if is_project else REGENERATE_DOC_TASK,
                 "form_schema_version": DOCUMENTATION_FORM_VERSION,
                 "empty_payload": empty_documentation_payload(source, destination_type),
                 "payload_kind": "documentation",
-                "extra_payload": {"destination_type": destination_type},
+                "extra_payload": self._documentation_extra_payload(
+                    destination_type, source
+                ),
             }
         return {
             "generate": GENERATE_TASK,

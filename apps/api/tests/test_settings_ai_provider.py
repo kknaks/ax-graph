@@ -75,7 +75,8 @@ async def test_get_seeded_ai_provider(client: AsyncClient) -> None:
     assert body["provider"] == "claude"
     assert body["options"]["timeout_sec"] == 300
     assert body["provider_options"]["effort"] == "medium"
-    # PLAN-010-T-011: 실행 6개 task 전부 model=claude-sonnet-4-6 오버라이드 시드.
+    # PLAN-010-T-011: 실행 task 전부 model=claude-sonnet-4-6 오버라이드 시드.
+    # WORK-012: plan-then-fanout 2종(plan_project·generate_feature_spec)도 Sonnet 오버라이드.
     assert body["task_overrides"] == {
         "collect_source_summary": {"model": "claude-sonnet-4-6"},
         "generate_classification_gate": {"model": "claude-sonnet-4-6"},
@@ -83,6 +84,8 @@ async def test_get_seeded_ai_provider(client: AsyncClient) -> None:
         "generate_documentation_gate": {"model": "claude-sonnet-4-6"},
         "regenerate_documentation_gate": {"model": "claude-sonnet-4-6"},
         "graph_rag_chat": {"model": "claude-sonnet-4-6"},
+        "plan_project": {"model": "claude-sonnet-4-6"},
+        "generate_feature_spec": {"model": "claude-sonnet-4-6"},
     }
 
 

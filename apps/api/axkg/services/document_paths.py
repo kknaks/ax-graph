@@ -15,9 +15,12 @@ MAIN_DIR_BY_TYPE = {
     "baseline": "projects/",
 }
 # 파생 create suggestion_type → 허용 디렉토리 (Derived Knowledge Apply Matrix, SPEC-004).
+# create_feature_spec(회사 프로젝트 팬아웃 기능정의서, WP11)는 projects/ 하위(구체 경로는
+# projects/{corp}/spec/ — corp는 시스템이 조립, project_scaffold.project_spec_path)로 검증한다.
 DERIVED_DIR_BY_TYPE = {
     "create_new_concept": "permanent/concepts/",
     "create_project_baseline": "projects/",
+    "create_feature_spec": "projects/",
 }
 
 

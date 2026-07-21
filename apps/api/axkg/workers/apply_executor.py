@@ -31,6 +31,7 @@ from axkg.repositories.stale import StaleMarkRepository
 from axkg.services.document_paths import DERIVED_DIR_BY_TYPE as _DERIVED_DIR_BY_TYPE
 from axkg.services.document_paths import MAIN_DIR_BY_TYPE as _MAIN_DIR_BY_TYPE
 from axkg.services.documents import DocumentService, stem_from_path
+from axkg.services.project_scaffold import corp_from_path, origin_final_path
 from axkg.services.graph import GraphService
 from axkg.storage.markdown_parser import parse_markdown
 from axkg.storage.markdown_root import DocumentExistsError, MarkdownRoot
@@ -244,6 +245,11 @@ class ApplyExecutor:
         if main_doc.document_type == "permanent":
             await self._stale.dismiss_document(main_doc.id)
 
+        # 3c) 회사 프로젝트 팬아웃 origin 보관(WP11 Phase 4): main이 projects/{corp}/baseline/이면
+        #     staging에 둔 첨부 docx 원본을 projects/{corp}/origin/으로 finalize한다(그래프 노드
+        #     아님, best-effort). corp/origin 정보가 없으면 no-op.
+        await self._finalize_project_origin(source_id, target_path)
+
         # 4) db_actions 정본 실행: source documented, revision/gate approved.
         await self._sources.mark_documented(source_id)
         await self._gates.update_revision(revision.id, status="approved", approved=True)
@@ -354,6 +360,36 @@ class ApplyExecutor:
                     change_summary=change_summary,
                     triggering_revision_id=revision_id,
                 )
+
+    async def _finalize_project_origin(
+        self, source_id: uuid.UUID, main_path: str | None
+    ) -> None:
+        """staging에 둔 첨부 docx 원본을 projects/{corp}/origin/으로 옮긴다(WP11 Phase 4).
+
+        corp는 main(원본요약) 경로 projects/{corp}/baseline/…에서 뽑는다. source.metadata의
+        origin staging 정보(staged_rel·filename)가 있고 staged 파일이 실재하면 origin 최종
+        경로로 복사하고 staging을 제거한다. origin은 그래프 노드가 아니라 바인드 마운트 raw
+        파일이다(documents 테이블/인덱스 미편입). 감사용 부가물이라 실패해도 apply를 막지 않는다.
+        """
+        corp = corp_from_path(main_path)
+        if not corp:
+            return
+        source = await self._sources.get(source_id)
+        origin = (source.metadata or {}).get("origin") if source is not None else None
+        if not origin:
+            return
+        staged_rel = origin.get("staged_rel")
+        filename = origin.get("filename")
+        if not staged_rel or not filename or not self._root.exists(staged_rel):
+            return
+        dest = origin_final_path(corp, filename)
+        if not dest:
+            return
+        try:
+            self._root.write_bytes(dest, self._root.read_bytes(staged_rel))
+            self._root.remove(staged_rel)
+        except OSError:
+            logger.warning("origin finalize failed source=%s corp=%s", source_id, corp)
 
     def _apply_suggestion(self, suggestion: dict, result: ApplyResult) -> None:
         """파생지식 file_action 실행. 내용(draft_markdown) 없으면 skip 기록."""

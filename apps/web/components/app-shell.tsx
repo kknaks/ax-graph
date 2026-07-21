@@ -25,6 +25,17 @@ const NAV_ITEMS: {
     ),
   },
   {
+    href: "/projects",
+    label: "회사 프로젝트",
+    minRole: "admin",
+    icon: (
+      <>
+        <path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1" />
+        <path d="M3 7h18a1 1 0 0 1 1 1v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a1 1 0 0 1 1-1z" />
+      </>
+    ),
+  },
+  {
     href: "/graph",
     label: "그래프",
     minRole: "staff",

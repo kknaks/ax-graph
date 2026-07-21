@@ -14,10 +14,11 @@
 | 출처 기록 | `reference` | "이 자료가 무엇을 말했나" — 출처 맥락·논지 흐름·인용 | 자료 하나 | 생성 후 거의 고정 |
 | 원자 개념 | `concept` | "이 개념은 무엇인가" — **사실의 SoT**, 출처 독립 | 개념 하나 | 여러 출처가 supplement로 합류하며 성장 |
 | 종합 노트 | `permanent` | "내 종합·판단/전략" — 원자 개념들을 엮은 살아있는 문서 | 영역 하나 | 개념 유입마다 성장 |
-| 실행 문서 | `baseline` | 프로젝트/실행 문서 | 프로젝트 | — |
+| 실행 문서 | `baseline`(원본요약) / `feature_spec`(기능정의서) | 회사 프로젝트 팬아웃 — "이 회사가 뭘 요구했나"(원본요약, main)와 "그게 어떤 기능들로 쪼개지나"(기능정의서, 요구 1항목=1장) | 회사 프로젝트 / 기능 하나 | 같은 기능 재유입 시 dedup 보강으로 성장 |
 
 - 지식 성장 방향은 **출처 → 원자 개념 → 종합/전략 → 실행**이다. reference가 원문을 소화하고, 그 안의 원자 개념이 concept로 갈라져 나가 사실의 SoT가 되며, concept들을 엮은 내 판단이 permanent로 자란다.
 - `permanent/`의 두 층(`permanent/concepts/`=원자 개념 concept, `permanent/` 루트=종합 permanent)은 합치지 않고 **위계를 유지**한다. concept는 독립 document_type이며 **파생지식**(`create_new_concept`/`supplement_existing_concept`)으로만 산출된다 — main 초안이나 템플릿 주입 대상이 아니다.
+- **실행 문서 층의 project는 단일 문서가 아니라 회사 프로젝트로 팬아웃한다** — `projects/{corp}/` 안의 원본요약(`project_source_summary`, main)과 기능정의서(`project_feature_spec`, derived) N장이다(요구 1항목=1장). 회사 프로젝트 내부의 `origin/`·`baseline/`·`spec/` 3층은 이 실행 문서 층 **안에서 다시 열리는 하위 구조**이며, 전역 4층(출처→개념→종합→실행)과는 층위가 다르다. 팬아웃·기능 dedup의 외부 계약 SSOT는 AXKG-SPEC-014다.
 
 ### SoT 위임 (중복 서술 금지)
 
@@ -44,7 +45,11 @@
 |---|---|---|---|
 | `resource` | reference note | `reference` | `resources/` |
 | `area` | permanent note (기존 개념 보충 또는 신규) | `permanent` | `permanent/` |
-| `project` | product 문서 후보 (MVP는 baseline만) | `baseline` | `projects/` |
+| `project` | 회사 프로젝트 팬아웃 — 원본요약(main) + 기능정의서(derived) N장 [^project] | `baseline`(원본요약) / `feature_spec`(기능정의서) | `projects/{corp}/baseline/` · `projects/{corp}/spec/` |
+
+[^project]: **project는 단일 문서가 아니라 origin/baseline/spec 3층으로 팬아웃**된다 — 첨부 docx 원본은 `projects/{corp}/origin/`에 raw로 보관, 원본요약(`project_source_summary`, main) 1장은 `baseline/`, 기능정의서(`project_feature_spec`, derived) N장은 `spec/`(요구 1항목=1장). 게이트는 `main_document`(원본요약) + `derived_suggestions[]`(기능별 초안: 신규 `create_feature_spec` / 같은 corp 기존 기능 dedup 매칭 `supplement_existing_feature`)를 한 초안에 담는다. 상세 SSOT는 AXKG-SPEC-014.
+
+    > **생성 방식 = plan-then-fanout**(AXKG-DEC-008/WORK-012). project 문서화 초안은 한 AI 호출로 원본요약+기능 N장을 통째 생성하지 않는다 — ① `plan_project`가 docx→**원본요약 + 기능목록(plan=`[{seq,기능명,요지}]`)** 을 가볍게 산출하고, ② plan의 각 기능마다 **독립 task(`generate_feature_spec`)가 병렬로 기능정의서 1장씩** 생성하며, ③ N개 draft를 **fan-in**해 위 게이트 revision(main+derived)으로 조립한다. 산출 계약(원본요약+기능정의서 N, main+derived, 경로·3층)은 **불변**이고 바뀌는 것은 생성 메커니즘뿐이다. 한 기능 생성이 실패하면 **그 기능만 실패 표시하고 나머지로 조립을 진행**하며(부분 진행), 실패 기능은 기능 단위로 재시도한다(11개 통째 재생성 아님). 그래서 각 `plan_project`/`generate_feature_spec` 프롬프트는 **자기 몫(원본요약+plan / 기능 1장)에만 집중**한다.
 
 - 초안 = frontmatter + 본문 + `up:`/`[[ ]]` 연결. **뼈대는 활성 템플릿, 채우는 방법은 활성 프롬프트를 따른다.**
 - 내용은 source 요약과 원문 근거 **안에서만** 채운다. 원문에 없는 사실을 지어내지 않는다.
@@ -55,6 +60,7 @@
 - 연결은 **주입된 컨텍스트 안에서만** 만든다: (a) 관련 문서 후보 top-N, (b) documents index 스냅샷(stem/aliases/title/type)에 있는 대상만 `[[ ]]`/`up:`으로 링크한다. 스냅샷 밖 target은 승인 시 깨진 링크로 거부된다 — **단, 같은 제안에서 함께 생성하는 파생 stem은 예외이며 main→concept SoT 위임 링크는 반드시 건다**(상세·근거는 `document-link-rules.md` 대원칙).
 - 본문 `[[ ]]`가 그래프 엣지의 단일 소스다. `up:`(lineage)에 넣은 stem은 반드시 본문 `[[ ]]`에도 있어야 한다.
 - 모든 연결에는 이유(`link_reason`)를 남긴다. 억지 연결 1개보다 정확한 연결 0개가 낫다.
+- **project 팬아웃의 원본요약↔기능정의서 연결·차용 링크 규약**(원본요약의 `## 기능 목록`이 각 기능정의서를 `[[기능-stem]]`으로 링크, 기능정의서 `up:`=회사 원본요약 stem + `## 연결`=원본요약 링크 + ax-graph 기존 역량 차용 링크)의 상세는 `document-link-rules.md`를 SSOT로 참조한다.
 
 ## 파생지식 규칙
 
@@ -64,17 +70,20 @@
 |---|---|---|---|---|
 | `supplement_existing_concept` | 기존 개념 노트 보충 | modify | `target_stem`(대상 concept 지목) | 기존 문서 경로 그대로 (시스템이 stem→경로 해소) |
 | `create_new_concept` | 신규 개념 노트 생성 | create | `filename_candidate`(파일명 stem) | `permanent/concepts/` |
-| `create_project_baseline` | product baseline 후보 생성 | create | `filename_candidate`(파일명 stem) | `projects/` |
+| `create_feature_spec` | project 팬아웃 — 신규 기능정의서 생성 (요구 1항목=1장) | create | `filename_candidate`(파일명 stem) | `projects/{corp}/spec/` |
+| `supplement_existing_feature` | project 팬아웃 — 같은 corp 기존 기능정의서 보강 (기능 dedup) | modify | `target_stem`(대상 기능정의서 지목) | 기존 문서 경로 그대로 (시스템이 stem→경로 해소) |
 
-- 파생도 **경로는 시스템이 조립한다**: create류는 `filename_candidate`에 파일명 stem만, supplement는 `target_stem`에 대상 concept의 stem만 낸다. modify 대상 stem이 index에서 해소되지 않으면 승인 apply에서 `PATH_NOT_ALLOWED`로 거부된다(안전망).
+- 파생도 **경로는 시스템이 조립한다**: create류는 `filename_candidate`에 파일명 stem만, supplement류는 `target_stem`에 대상 문서의 stem만 낸다. modify 대상 stem이 index에서 해소되지 않으면 승인 apply에서 `PATH_NOT_ALLOWED`로 거부된다(안전망).
+- **project 팬아웃 파생 2종은 destination이 `project`일 때만** 낸다 — 원본요약(`project_source_summary`)이 `main_document`, 각 기능이 `derived_suggestions[]`다. **기능 dedup은 같은 `{corp}` 경계 안으로 한정**한다: 같은 회사에 같은 기능이 이미 있으면 신규 `create_feature_spec` 대신 `supplement_existing_feature`(기존 spec 보강)를 낸다. 매칭이 모호하면 신규 생성으로 안전 폴백한다. **기능정의서에는 요청부서·요청 이력을 붙이지 않는다**(기능은 프로젝트의 기능 카탈로그, 부서 무관 — AXKG-DEC-007). 팬아웃 파생의 apply 규칙 SSOT는 AXKG-SPEC-014/004다.
 
 ### 파생 본문 (draft_markdown 필수)
 
 파생 제안도 **`draft_markdown`(문서 전문)이 필수**다 — 본문 없이 제안만 하면 실행 시 건너뛴다.
 
-- **create류** (`create_new_concept`/`create_project_baseline`): frontmatter+본문을 갖춘 **완전한 문서 전문**을 `draft_markdown`에 쓴다(활성 템플릿·링크 규칙 준수). executor가 위 경로에 신규 생성한다.
-- **modify** (`supplement_existing_concept`, **A1 모델**): 연결 후보 컨텍스트에 함께 주입된 **대상 문서 전문**에 보충을 반영한 **수정된 전문**을 `draft_markdown`에 쓴다. executor는 그 전문으로 기존 파일을 **overwrite**한다(diff/patch 적용 엔진은 없다). 무엇을 어떻게 보충했는지는 `diff_preview`에 리뷰용 요지로 남긴다. **전문이 주입되지 않은 문서는 modify로 제안하지 않는다.**
-- **보충 대상은 concept만**: `supplement_existing_concept`의 대상은 `permanent/concepts/`의 **concept 노트로 한정**한다 — reference/permanent/baseline은 보충 대상이 아니다(reference는 "출처 기록, 거의 고정" 정체성이고, 개념 성장·stale 연쇄는 concept에서만 일어난다). concept가 아닌 문서를 대상으로 고르면 승인 apply에서 `SUPPLEMENT_TARGET_NOT_CONCEPT`로 거부된다.
+- **create류** (`create_new_concept`/`create_feature_spec`): frontmatter+본문을 갖춘 **완전한 문서 전문**을 `draft_markdown`에 쓴다(활성 템플릿·링크 규칙 준수). executor가 위 경로에 신규 생성한다.
+- **modify** (`supplement_existing_concept`/`supplement_existing_feature`, **A1 모델**): 연결 후보 컨텍스트에 함께 주입된 **대상 문서 전문**에 보충을 반영한 **수정된 전문**을 `draft_markdown`에 쓴다. executor는 그 전문으로 기존 파일을 **overwrite**한다(diff/patch 적용 엔진은 없다). 무엇을 어떻게 보충했는지는 `diff_preview`에 리뷰용 요지로 남긴다. **전문이 주입되지 않은 문서는 modify로 제안하지 않는다.**
+- **concept 보충 대상은 concept만**: `supplement_existing_concept`의 대상은 `permanent/concepts/`의 **concept 노트로 한정**한다 — reference/permanent는 보충 대상이 아니다(reference는 "출처 기록, 거의 고정" 정체성이고, 개념 성장·stale 연쇄는 concept에서만 일어난다). concept가 아닌 문서를 대상으로 고르면 승인 apply에서 `SUPPLEMENT_TARGET_NOT_CONCEPT`로 거부된다.
+- **feature 보충 대상은 같은 corp 기능정의서만**: `supplement_existing_feature`의 대상은 **같은 `{corp}`의 기존 기능정의서**(`projects/{corp}/spec/`)로 한정한다 — 회사를 넘는 spec 재사용·통합은 하지 않는다(회사가 다르면 같은 기능이라도 별개 spec). 이 dedup 규약의 SSOT는 AXKG-SPEC-014다.
 
 ## 승인 전 확정 금지
 
