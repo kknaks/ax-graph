@@ -7,7 +7,7 @@
 // - GET  /projects:slug-preview?name=   회사명 → slug 미리보기 + 충돌 여부 (U-1)
 // - POST /projects                       회사 프로젝트 스캐폴드 생성/합류/신규 분기 (U-1/U-2)
 // - GET  /projects                       회사 프로젝트 목록(트리 루트) (U-3)
-// - GET  /projects/{corp}                한 corp 의 origin/baseline/spec 트리 (U-3)
+// - GET  /projects/{corp}                한 corp 의 origin/baseline/spec/context 트리 (U-3)
 
 import { ApiError, apiFetch, caseMessage } from "./index";
 
@@ -24,6 +24,9 @@ export type OnConflict = "merge" | "create_new";
 export interface CreateProjectRequest {
   name: string;
   on_conflict?: OnConflict | null;
+  // 회사 간략정보 (WORK-013 P1) — 회사 루트 {corp}.md 에 반영. 선택 입력(BE schemas/projects.py 필드명 그대로).
+  domain?: string | null;
+  intro?: string | null;
 }
 
 /** POST /projects 응답 — created(신규/suffix 신규) 또는 merged(합류). */
@@ -31,6 +34,8 @@ export interface CreateProjectResult {
   slug: string;
   created?: boolean;
   merged?: boolean;
+  // 새로 쓴 회사 루트 {corp}.md 경로(WORK-013). 이미 있던 앵커면 null/미포함.
+  root_path?: string | null;
 }
 
 /** GET /projects 응답 항목 — 회사 프로젝트 루트 식별자. */
@@ -41,11 +46,15 @@ export interface ProjectListResponse {
   projects: ProjectSummary[];
 }
 
-/** GET /projects/{corp} 응답 — 3층 폴더별 항목명 목록(origin=원본 파일, baseline/spec=문서명). */
+/** GET /projects/{corp} 응답 — 폴더별 항목명 목록(origin=원본 파일, baseline/spec/context=문서명).
+ * context 는 회사 배경지식 단일 문서 층(WORK-013). 구형 프로젝트는 빈 목록으로 온다.
+ * 회사 루트 `{corp}.md` 는 폴더가 아니라 corp 디렉토리 최상단 앵커라 folders 에 포함되지 않는다
+ * (경로는 결정적: projects/{corp}/{corp}.md). */
 export interface ProjectFolders {
   origin: string[];
   baseline: string[];
   spec: string[];
+  context?: string[];
 }
 export interface ProjectTree {
   corp: string;

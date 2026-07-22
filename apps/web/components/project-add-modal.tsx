@@ -1,5 +1,6 @@
-// 프로젝트 추가 모달 (AXKG-SPEC-014 U-1 · U-2) — 회사 프로젝트 수동·독립 스캐폴드.
-//  U-1: 회사명 입력 → slug 실시간 미리보기(GET /projects:slug-preview) + 충돌 여부 표시.
+// 프로젝트 추가 모달 (AXKG-SPEC-014 U-1 · U-2 · WORK-013 P1) — 회사 프로젝트 수동·독립 스캐폴드.
+//  U-1: 회사명 + 회사 간략정보(도메인·한 줄 소개) 입력 → slug 실시간 미리보기 + 충돌 여부 표시.
+//       회사 간략정보는 회사 루트 앵커 `{corp}.md` 에 반영된다(WORK-013 P1).
 //  U-2: slug 충돌 시 확인 분기 — [기존에 추가](merge) / [새 프로젝트로](create_new) → POST /projects.
 // 이 작업은 업로드/분류와 별개인 수동 디렉토리 스캐폴딩이다(AI 자동 생성 아님).
 // admin 전용 표면(/projects 라우트 가드로 보호) — 여기서 별도 권한 분기는 하지 않는다.
@@ -16,6 +17,8 @@ import {
   type SlugPreview,
 } from "@/lib/api-client/projects";
 
+const INTRO_MAX = 500;
+
 export function ProjectAddModal({
   open,
   onClose,
@@ -27,6 +30,9 @@ export function ProjectAddModal({
   onCreated: (result: CreateProjectResult) => void;
 }) {
   const [name, setName] = useState("");
+  // 회사 간략정보(WORK-013 P1) — 회사 루트 {corp}.md 에 반영. 선택 입력.
+  const [domain, setDomain] = useState("");
+  const [intro, setIntro] = useState("");
   const [preview, setPreview] = useState<SlugPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -36,6 +42,8 @@ export function ProjectAddModal({
   useEffect(() => {
     if (open) {
       setName("");
+      setDomain("");
+      setIntro("");
       setPreview(null);
       setPreviewing(false);
       setSubmitting(false);
@@ -88,15 +96,20 @@ export function ProjectAddModal({
 
   const trimmed = name.trim();
   const conflict = preview?.conflict === true;
+  const introTooLong = intro.length > INTRO_MAX;
 
   async function submit(onConflict?: OnConflict) {
-    if (!trimmed || submitting) return;
+    if (!trimmed || submitting || introTooLong) return;
     setSubmitting(true);
     setError(null);
     try {
+      const trimmedDomain = domain.trim();
+      const trimmedIntro = intro.trim();
       const result = await createProject({
         name: trimmed,
         ...(onConflict ? { on_conflict: onConflict } : {}),
+        ...(trimmedDomain ? { domain: trimmedDomain } : {}),
+        ...(trimmedIntro ? { intro: trimmedIntro } : {}),
       });
       onCreated(result);
       onClose();
@@ -173,6 +186,42 @@ export function ProjectAddModal({
           )}
         </div>
 
+        {/* 회사 간략정보(WORK-013 P1) — 회사 루트 {corp}.md 에 반영. 선택 입력. */}
+        <label htmlFor="corp-domain" className="mt-3 block text-[11px] font-medium text-muted-foreground">
+          도메인 (선택)
+        </label>
+        <input
+          id="corp-domain"
+          value={domain}
+          onChange={(e) => setDomain(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !conflict) submit();
+          }}
+          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"
+          placeholder="예: 물류 SaaS, 병원 EMR"
+        />
+
+        <label htmlFor="corp-intro" className="mt-3 block text-[11px] font-medium text-muted-foreground">
+          한 줄 소개 (선택 · {INTRO_MAX}자 이하)
+        </label>
+        <textarea
+          id="corp-intro"
+          value={intro}
+          onChange={(e) => setIntro(e.target.value)}
+          className="mt-1 h-16 w-full resize-none rounded-md border border-input bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring/40"
+          placeholder="이 회사를 한 줄로 — 회사 루트 문서에 기록됩니다"
+        />
+        <div className="mt-1 text-right">
+          <span className={introTooLong ? "text-[10px] text-destructive" : "text-[10px] text-muted-foreground"}>
+            {intro.length} / {INTRO_MAX}
+          </span>
+        </div>
+
+        <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+          만들면 회사 루트 문서 <span className="font-mono">{preview?.slug ?? "{corp}"}.md</span> 와{" "}
+          <span className="font-mono">context/</span> 층이 함께 스캐폴드됩니다.
+        </p>
+
         {/* U-2 slug 충돌 확인 — 기존 사용(merge) / 새 프로젝트로(create_new) */}
         {conflict && preview && (
           <div
@@ -221,7 +270,7 @@ export function ProjectAddModal({
               <button
                 type="button"
                 onClick={() => submit("create_new")}
-                disabled={submitting}
+                disabled={submitting || introTooLong}
                 className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
               >
                 {submitting ? "만드는 중…" : "새 프로젝트로"}
@@ -231,7 +280,7 @@ export function ProjectAddModal({
             <button
               type="button"
               onClick={() => submit()}
-              disabled={submitting || !trimmed}
+              disabled={submitting || !trimmed || introTooLong}
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
             >
               {submitting ? "만드는 중…" : "만들기"}
