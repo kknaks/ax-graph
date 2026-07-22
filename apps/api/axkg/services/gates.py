@@ -1054,7 +1054,9 @@ class GateService:
             raise LookupError(f"ai_task_definition missing: {FEATURE_TASK_TYPE}")
         global_settings = await self._settings.get_value(AI_PROVIDER_SETTINGS_KEY)
         config = resolve_execution_config(global_settings, definition)
-        # 실패 task payload에서 실행 재료만 승계(plan_item/stem/corp) — snapshot 잡음은 뺀다.
+        # 실패 task payload에서 실행 재료만 승계 — snapshot 잡음은 뺀다. dedup(supplement) 배선
+        # 키(suggestion_type/target_stem/existing_spec_markdown)도 함께 승계해 재시도가 create로
+        # 강등되지 않게 한다(WORK-013 dedup).
         prior = target.payload or {}
         payload = {
             "kind": "feature_spec",
@@ -1063,6 +1065,9 @@ class GateService:
             "corp": prior.get("corp"),
             "destination_type": "project",
         }
+        for key in ("suggestion_type", "target_stem", "existing_spec_markdown"):
+            if prior.get(key) is not None:
+                payload[key] = prior[key]
         task = await self._tasks.create(
             task_type=FEATURE_TASK_TYPE,
             task_definition_id=definition.id,

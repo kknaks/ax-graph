@@ -29,15 +29,19 @@ from axkg.core.database import get_session_factory
 from axkg.dto.ai import AiTaskDTO
 from axkg.integrations.open_kknaks import OpenKknaksClient
 from axkg.repositories.ai_tasks import AiTaskRepository
+from axkg.repositories.documents import DocumentRepository
 from axkg.repositories.gates import GateRepository
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai import AiExecutionService, ContextBuilderRegistry
 from axkg.services.ai.documentation_gate import wrap_documentation_output
 from axkg.services.document_anchor import apply_document_anchor
 from axkg.services.ai.feature_spec import (
+    EXISTING_SPEC_MARKDOWN_KEY,
     FEATURE_RESULT_KEY,
     PLAN_ITEM_KEY,
     SOURCE_SUMMARY_STEM_KEY,
+    SUGGESTION_TYPE_KEY,
+    TARGET_STEM_KEY,
     FeatureSpecContextBuilder,
 )
 from axkg.services.ai.feature_spec import HANDLER_KIND as FEATURE_HANDLER
@@ -47,6 +51,8 @@ from axkg.services.ai.plan_project import (
 )
 from axkg.services.ai.plan_project import HANDLER_KIND as PLAN_HANDLER
 from axkg.services.document_paths import normalize_filename
+from axkg.services.documents import DocumentService
+from axkg.services.project_scaffold import corp_feature_specs
 from axkg.services.qmd import build_qmd_client
 from axkg.storage.markdown_root import MarkdownRoot
 
@@ -55,8 +61,12 @@ logger = logging.getLogger("axkg.plan_fanout_execution")
 PLAN_TASK_TYPE = "plan_project"
 FEATURE_TASK_TYPE = "generate_feature_spec"
 CORP_KEY = "corp"
+CREATE_FEATURE_SPEC = "create_feature_spec"
+SUPPLEMENT_FEATURE = "supplement_existing_feature"
 # 기능 task 병렬 상한(worker concurrency). 너무 크면 open-kknaks/모델에 부담이라 보수적으로.
 FANOUT_CONCURRENCY = 5
+# 기존 기능정의서 전문 주입 상한(문자). supplement 병합의 재료.
+_EXISTING_SPEC_CAP = 8000
 
 
 def _qmd():
@@ -99,7 +109,7 @@ async def execute_plan_then_fanout(
             logger.warning("plan_project failed gate=%s task=%s", gate_id, plan_task_id)
             return
         feature_task_ids = await _spawn_feature_tasks(
-            service, session, plan_done, gate_id, revision_id
+            service, session, plan_done, gate_id, revision_id, root=the_root
         )
         await session.commit()
 
@@ -127,8 +137,16 @@ async def _spawn_feature_tasks(
     plan_task: AiTaskDTO,
     gate_id: uuid.UUID,
     revision_id: uuid.UUID,
+    *,
+    root: MarkdownRoot,
 ) -> list[uuid.UUID]:
-    """plan의 각 기능 → generate_feature_spec task(queued) 발주. corp·요약 stem을 실어 보낸다."""
+    """plan의 각 기능 → generate_feature_spec task(queued) 발주. corp·요약 stem을 실어 보낸다.
+
+    회사 내부 기능 dedup(AXKG-SPEC-014/DEC-007): plan 기능의 stem이 같은 `{corp}`의 기존
+    기능정의서 index에 **존재하면 supplement_existing_feature**(기존 spec 업그레이드, 기존 전문
+    주입), **없으면 create_feature_spec**(신규). 매칭은 같은 corp 경계 안으로만 한정하며, 기존
+    전문을 읽을 수 없으면 안전하게 신규 생성으로 폴백한다.
+    """
     gates = GateRepository(session)
     revision = await gates.get_revision(revision_id)
     plan_output = (revision.payload or {}).get(PLAN_OUTPUT_KEY) if revision else None
@@ -141,6 +159,11 @@ async def _spawn_feature_tasks(
     ).stem
     corp = plan_task.payload.get(CORP_KEY)
 
+    # corp 기존 기능정의서 index(같은 corp 한정) — dedup 매칭 기준.
+    existing_specs = corp_feature_specs(
+        await DocumentRepository(session).list_all(), corp
+    )
+
     # corp·요약 stem을 revision에 보관(fan-in·재시도가 재사용).
     payload = dict(revision.payload or {})
     payload[CORP_KEY] = corp
@@ -149,21 +172,51 @@ async def _spawn_feature_tasks(
 
     task_ids: list[uuid.UUID] = []
     for item in plan:
+        item_payload = {
+            "kind": "feature_spec",
+            PLAN_ITEM_KEY: item,
+            SOURCE_SUMMARY_STEM_KEY: summary_stem,
+            CORP_KEY: corp,
+            "destination_type": "project",
+        }
+        _apply_dedup_branch(item, existing_specs, root, item_payload)
         task = await service.create_task(
             FEATURE_TASK_TYPE,
             source_id=plan_task.source_id,
             gate_id=gate_id,
             revision_id=revision_id,
-            payload={
-                "kind": "feature_spec",
-                PLAN_ITEM_KEY: item,
-                SOURCE_SUMMARY_STEM_KEY: summary_stem,
-                CORP_KEY: corp,
-                "destination_type": "project",
-            },
+            payload=item_payload,
         )
         task_ids.append(task.id)
     return task_ids
+
+
+def _apply_dedup_branch(
+    item: dict, existing_specs: dict, root: MarkdownRoot, item_payload: dict
+) -> None:
+    """plan 기능이 기존 corp 기능과 같으면 supplement, 아니면 create로 payload를 분기한다.
+
+    stem 정확 매칭(= plan이 기존 stem 재사용). 기존 전문을 읽어 supplement 재료로 싣는다.
+    전문을 못 읽으면 안전하게 create로 폴백(무근거 overwrite 금지).
+    """
+    stem = _feature_stem(item.get("filename_candidate"))
+    existing = existing_specs.get(stem)
+    if not existing:
+        item_payload[SUGGESTION_TYPE_KEY] = CREATE_FEATURE_SPEC
+        return
+    existing_md = ""
+    try:
+        if root.exists(existing["path"]):
+            existing_md = root.read_text(existing["path"])
+    except OSError:
+        existing_md = ""
+    if not existing_md.strip():
+        # 기존 전문 부재/읽기 실패 → 애매하므로 신규 생성 폴백(SPEC-014 안전 폴백).
+        item_payload[SUGGESTION_TYPE_KEY] = CREATE_FEATURE_SPEC
+        return
+    item_payload[SUGGESTION_TYPE_KEY] = SUPPLEMENT_FEATURE
+    item_payload[TARGET_STEM_KEY] = stem
+    item_payload[EXISTING_SPEC_MARKDOWN_KEY] = existing_md[:_EXISTING_SPEC_CAP]
 
 
 async def _execute_feature_task(
@@ -307,14 +360,26 @@ async def finalize_fanout(
         spec_md = apply_document_anchor(
             draft["markdown_full"], document_type="feature_spec", up_target=summary_stem
         )
-        derived.append(
-            {
-                "suggestion_type": "create_feature_spec",
-                "filename_candidate": draft["filename_candidate"],
-                "draft_markdown": spec_md,
-                "link_reason": item.get("summary") or "요구 1항목=1장(기능정의서)",
-            }
-        )
+        # 기능 dedup: supplement면 기존 stem을 업그레이드(modify), 아니면 신규 생성(create).
+        if task.payload.get(SUGGESTION_TYPE_KEY) == SUPPLEMENT_FEATURE:
+            derived.append(
+                {
+                    "suggestion_type": SUPPLEMENT_FEATURE,
+                    "target_stem": task.payload.get(TARGET_STEM_KEY) or stem,
+                    "draft_markdown": spec_md,
+                    "link_reason": item.get("summary") or "기존 기능정의서 보강(dedup)",
+                    "diff_preview": f"기존 기능정의서 '{stem}'에 새 요구 반영(업그레이드).",
+                }
+            )
+        else:
+            derived.append(
+                {
+                    "suggestion_type": CREATE_FEATURE_SPEC,
+                    "filename_candidate": draft["filename_candidate"],
+                    "draft_markdown": spec_md,
+                    "link_reason": item.get("summary") or "요구 1항목=1장(기능정의서)",
+                }
+            )
 
     source = await sources.get(gate.source_id)
     # 원본요약(main)은 plan_output 원본에서 복사해, 이번에 실패/미완인 기능 링크만 제거한다.
@@ -331,7 +396,17 @@ async def finalize_fanout(
         "document_draft": main_draft,
         "derived_suggestions": derived,
     }
-    envelope = wrap_documentation_output(source, "project", output, corp=corp)
+    # supplement 파생의 target_stem→기존 경로 해소를 위해 resolver를 넘긴다(같은 corp 기존 spec).
+    resolver = await DocumentService(session).build_resolver()
+
+    def _resolve_existing_path(stem: str) -> str | None:
+        found = resolver.resolve(stem)
+        return found.path if found is not None else None
+
+    envelope = wrap_documentation_output(
+        source, "project", output, corp=corp,
+        resolve_existing_path=_resolve_existing_path,
+    )
     progress = compute_fanout_progress(plan, latest)
     envelope["form"]["fanout"] = progress
     # fan-in·재시도가 재사용할 재료를 revision에 유지(plan_output·corp).

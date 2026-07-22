@@ -104,13 +104,34 @@ def origin_staging_path(source_id: str, filename: str) -> str:
 
 
 def corp_from_path(path: str | None) -> str | None:
-    """projects/{corp}/{origin|baseline|spec}/... 경로에서 corp를 뽑는다. 아니면 None."""
+    """projects/{corp}/{origin|baseline|spec|context}/... 경로에서 corp를 뽑는다. 아니면 None."""
     if not path:
         return None
     parts = PurePosixPath(path).parts
     if len(parts) >= 3 and parts[0] == PROJECTS_DIR and parts[2] in CORP_SUBDIRS:
         return parts[1]
     return None
+
+
+def corp_feature_specs(docs, corp: str | None) -> dict:
+    """corp의 **현재(current) 기능정의서** 목록 {stem: {stem,title,path}} — 기능 dedup 매칭용.
+
+    `docs`는 DocumentDTO 유사 객체 리스트(document_type/status/path/stem/title). 매칭은 **같은
+    `{corp}` 경계 안으로만** 한정한다(회사 넘는 매칭 금지, AXKG-DEC-007 D4). superseded 박제본은
+    제외한다(현재 유효본만 dedup 대상). corp가 없으면 빈 dict(팬아웃 skip 상황).
+    """
+    out: dict = {}
+    if not corp:
+        return out
+    for d in docs:
+        if getattr(d, "document_type", None) != "feature_spec":
+            continue
+        if getattr(d, "status", None) != "current":
+            continue
+        if corp_from_path(getattr(d, "path", None)) != corp:
+            continue
+        out[d.stem] = {"stem": d.stem, "title": d.title, "path": d.path}
+    return out
 
 
 def is_corp_project_dir(root, corp: str) -> bool:

@@ -19,9 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from axkg.dto.ai import AiTaskDefinitionDTO, AiTaskDTO, AssembledBlockDTO
 from axkg.dto.source import SourceDTO
+from axkg.repositories.documents import DocumentRepository
 from axkg.repositories.gates import GateRepository
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai.context import ContextBuilder, ContextBuildError
+from axkg.services.project_scaffold import corp_feature_specs
+
+CORP_KEY = "corp"
 
 HANDLER_KIND = "plan_project"
 PLAN_TEMPLATE_KEY = "project_source_summary"
@@ -38,6 +42,7 @@ class PlanProjectContextBuilder(ContextBuilder):
     def __init__(self, session: AsyncSession) -> None:
         self._sources = SourceRepository(session)
         self._gates = GateRepository(session)
+        self._docs = DocumentRepository(session)
 
     async def build_data_blocks(
         self, task: AiTaskDTO, definition: AiTaskDefinitionDTO
@@ -59,7 +64,37 @@ class PlanProjectContextBuilder(ContextBuilder):
                 )
             )
         blocks.append(self._source_text_block(source))
+        # 회사 내부 기능 dedup(AXKG-SPEC-014/DEC-007): 같은 corp에 이미 있는 기능정의서를
+        # 주입해, 새 요구 중 기존 기능과 같은 것은 그 stem을 재사용하도록 유도한다(신규 중복 방지).
+        existing_block = await self._existing_features_block(task.payload.get(CORP_KEY))
+        if existing_block is not None:
+            blocks.append(existing_block)
         return blocks
+
+    async def _existing_features_block(
+        self, corp: str | None
+    ) -> AssembledBlockDTO | None:
+        if not corp:
+            return None
+        existing = corp_feature_specs(await self._docs.list_all(), corp)
+        if not existing:
+            return None
+        listed = [
+            {"filename_candidate": v["stem"], "feature_name": v["title"]}
+            for v in existing.values()
+        ]
+        return AssembledBlockDTO(
+            kind="data",
+            label="existing_corp_features",
+            text=(
+                "[이 회사에 이미 있는 기능(같은 corp)] 아래는 이 회사 프로젝트에 이미 존재하는 "
+                "기능정의서 목록이다. 새 요구를 기능으로 분해할 때, **기존 기능과 같은 기능이면 그 "
+                "filename_candidate(stem)를 그대로 재사용**하라(새 stem을 만들지 마라 — 시스템이 그 "
+                "기존 문서를 업그레이드한다). 기존에 없는 새 기능만 새 stem을 만든다. 부서가 달라도 "
+                "같은 기능이면 하나로 본다(기능 카탈로그, 부서 무관).\n"
+                + json.dumps(listed, ensure_ascii=False, indent=2)
+            ),
+        )
 
     def select_template_key(
         self, task: AiTaskDTO, definition: AiTaskDefinitionDTO

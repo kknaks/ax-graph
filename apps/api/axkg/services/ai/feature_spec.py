@@ -32,6 +32,11 @@ FEATURE_TEMPLATE_KEY = "project_feature_spec"
 FEATURE_RESULT_KEY = "feature_result"
 PLAN_ITEM_KEY = "plan_item"
 SOURCE_SUMMARY_STEM_KEY = "source_summary_stem"
+# 기능 dedup(supplement) 배선용 payload 키 (AXKG-SPEC-014/DEC-007).
+SUGGESTION_TYPE_KEY = "suggestion_type"
+TARGET_STEM_KEY = "target_stem"
+EXISTING_SPEC_MARKDOWN_KEY = "existing_spec_markdown"
+SUPPLEMENT_FEATURE = "supplement_existing_feature"
 
 _SOURCE_TEXT_CAP = 60_000
 _RETRIEVER_TOP_N = 8
@@ -73,6 +78,11 @@ class FeatureSpecContextBuilder(ContextBuilder):
             self._source_text_block(source),
             await self._connection_block(plan_item),
         ]
+        # 기능 dedup(supplement): 기존 기능정의서 전문을 주입해 병합·업그레이드를 지시한다.
+        if task.payload.get(SUGGESTION_TYPE_KEY) == SUPPLEMENT_FEATURE:
+            existing_md = task.payload.get(EXISTING_SPEC_MARKDOWN_KEY)
+            if existing_md:
+                blocks.append(self._supplement_block(existing_md))
         return blocks
 
     def select_template_key(
@@ -106,6 +116,23 @@ class FeatureSpecContextBuilder(ContextBuilder):
             kind="data",
             label="source_text",
             text="[원문(docx 텍스트 추출본)]\n" + text,
+        )
+
+    @staticmethod
+    def _supplement_block(existing_md: str) -> AssembledBlockDTO:
+        """기능 dedup — 기존 기능정의서 전문 주입 + 병합·업그레이드 규율(supplement_existing_concept 동형)."""
+        return AssembledBlockDTO(
+            kind="data",
+            label="existing_feature_spec",
+            text=(
+                "[기존 기능정의서 전문 — 이 기능은 이미 존재한다] 이 회사에 이 기능정의서가 이미 "
+                "있다. 아래 **기존 전문을 기준**으로, 새 docx 요구가 더한 상세(요구 배경·유저 플로우·"
+                "상세 요구·수용 기준 등)를 **병합·보강한 업그레이드 전문**을 draft_markdown에 내라 "
+                "(diff/patch가 아니라 수정된 전문 overwrite). **기존 내용을 보존**하고 새 요구만 "
+                "합류시켜라 — 기존 서술을 함부로 삭제·축소하지 마라. frontmatter의 filename은 기존 "
+                "stem을 그대로 유지하고, 더할 상세가 없으면 기존 전문을 실질적으로 유지한다.\n\n"
+                + existing_md
+            ),
         )
 
     async def _connection_block(self, plan_item: dict) -> AssembledBlockDTO:
