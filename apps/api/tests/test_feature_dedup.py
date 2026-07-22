@@ -20,12 +20,13 @@ from axkg.repositories.documents import DocumentRepository
 from axkg.repositories.gates import GateRepository
 from axkg.repositories.sources import SourceRepository
 from axkg.services import project_scaffold as ps
+from axkg.services.ai.feature_spec import PLAN_ITEM_KEY
 from axkg.services.ai.plan_project import PlanProjectContextBuilder
 from axkg.services.gates import GateService
 from axkg.services.graph import GraphService
 from axkg.services.plan_fanout_execution import (
-    _apply_dedup_branch,
     _latest_by_seq,
+    _resolve_feature_target,
     execute_plan_then_fanout,
 )
 from axkg.storage.markdown_root import MarkdownRoot
@@ -73,29 +74,28 @@ async def test_dedup_branch_supplement_vs_create(
     root = MarkdownRoot(str(markdown_root))
     ps.create_scaffold(root, "the-sc")
     root.write_new("projects/the-sc/spec/shared-calendar.md", _spec_md("shared-calendar"))
-    existing = {
-        "shared-calendar": {
-            "stem": "shared-calendar",
-            "title": "공유 캘린더",
-            "path": "projects/the-sc/spec/shared-calendar.md",
-        }
+    existing_spec = {
+        "stem": "shared-calendar",
+        "title": "공유 캘린더",
+        "path": "projects/the-sc/spec/shared-calendar.md",
     }
+    corp_specs = {"shared-calendar": existing_spec}
+    ebs = {"shared-calendar": type("D", (), {"stem": "shared-calendar"})}
     # 기존 stem 재사용 → supplement + 기존 전문 주입
-    p1: dict = {}
-    _apply_dedup_branch({"filename_candidate": "shared-calendar.md"}, existing, root, p1)
-    assert p1["suggestion_type"] == "supplement_existing_feature"
-    assert p1["target_stem"] == "shared-calendar"
-    assert "기존 상세" in p1["existing_spec_markdown"]
-    # 새 stem → create
-    p2: dict = {}
-    _apply_dedup_branch({"filename_candidate": "new-thing.md"}, existing, root, p2)
-    assert p2["suggestion_type"] == "create_feature_spec"
-    assert "target_stem" not in p2
-    # 인덱스엔 있으나 파일이 없으면(전문 읽기 실패) 안전 폴백 create
-    ghost = {"ghost": {"stem": "ghost", "title": "g", "path": "projects/the-sc/spec/ghost.md"}}
-    p3: dict = {}
-    _apply_dedup_branch({"filename_candidate": "ghost.md"}, ghost, root, p3)
-    assert p3["suggestion_type"] == "create_feature_spec"
+    a1 = _resolve_feature_target("shared-calendar", "the-sc", ebs, corp_specs, set(), root)
+    assert a1.suggestion_type == "supplement_existing_feature"
+    assert a1.target_stem == "shared-calendar"
+    assert "기존 상세" in a1.existing_md
+    # 새 stem(충돌 없음) → create as-is
+    a2 = _resolve_feature_target("new-thing", "the-sc", {}, corp_specs, set(), root)
+    assert a2.suggestion_type == "create_feature_spec"
+    assert a2.final_stem == "new-thing" and a2.target_stem is None
+    # 인덱스엔 있으나 파일이 없으면(전문 읽기 실패) supplement 안 하고 disambiguate create
+    ghost_cs = {"ghost": {"stem": "ghost", "title": "g", "path": "projects/the-sc/spec/ghost.md"}}
+    ghost_ebs = {"ghost": type("D", (), {"stem": "ghost"})}
+    a3 = _resolve_feature_target("ghost", "the-sc", ghost_ebs, ghost_cs, set(), root)
+    assert a3.suggestion_type == "create_feature_spec"
+    assert a3.final_stem == "the-sc-ghost"  # 충돌 회피(전문 못 읽어 supplement 불가)
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +201,89 @@ async def test_different_corp_same_name_creates_separate(
     async with session_factory() as session:
         feats = await AiTaskRepository(session).list_by_gate(gate_id, "generate_feature_spec")
         latest = _latest_by_seq(feats)
-        # the-sc의 shared-calendar는 acme와 별개 → create(회사 넘는 매칭 안 함)
+        # the-sc의 shared-calendar는 acme와 별개 → create(회사 넘는 매칭 안 함)이되, acme와 stem이
+        # 겹치므로 disambiguate해 DUPLICATE_STEM을 피한다(the-sc-shared-calendar).
         assert latest[1].payload["suggestion_type"] == "create_feature_spec"
+        assert latest[1].payload[PLAN_ITEM_KEY]["filename_candidate"] == "the-sc-shared-calendar.md"
         revision = await GateRepository(session).get_revision(rev_id)
-        types = {d["suggestion_type"] for d in revision.payload["form"]["derived_suggestions"]}
+        derived = revision.payload["form"]["derived_suggestions"]
+        types = {d["suggestion_type"] for d in derived}
         assert types == {"create_feature_spec"}
+        paths = {d["target_path"] for d in derived}
+        assert "projects/the-sc/spec/the-sc-shared-calendar.md" in paths  # 별개 문서
+    # acme 원본 문서는 불변(회사 넘는 매칭 안 함)
+    async with session_factory() as session:
+        acme = await DocumentRepository(session).get_by_stem("shared-calendar")
+        assert acme.path == "projects/acme/spec/shared-calendar.md"
+
+
+# ---------------------------------------------------------------------------
+# create stem이 concept과 충돌 → disambiguate(concept 불변, DUPLICATE_STEM 안 남)
+# ---------------------------------------------------------------------------
+
+
+async def _index_concept(session_factory, root: MarkdownRoot, stem: str) -> None:
+    rel = f"permanent/concepts/{stem}.md"
+    root.write_new(rel, f"---\ntype: concept\ntitle: {stem}\n---\n\n# {stem}\n\n원자 개념.\n")
+    async with session_factory() as s:
+        await GraphService(s, root=root).rebuild_document(rel)
+        await s.commit()
+
+
+async def test_create_colliding_with_concept_disambiguates(
+    session_factory: async_sessionmaker[AsyncSession], markdown_root: Path
+) -> None:
+    root = MarkdownRoot(str(markdown_root))
+    sid, gate_id, rev_id, plan_task_id = await _setup_project_gate(session_factory, root)
+    # 전역 concept 'review-manage'가 이미 있다(같은 stem을 plan이 뽑는 상황).
+    await _index_concept(session_factory, root, "review-manage")
+
+    await execute_plan_then_fanout(
+        plan_task_id, gate_id, rev_id, client=RoutingFakeClient(fail_stems=set()),
+        session_factory=session_factory, root=root,
+    )
+    async with session_factory() as session:
+        feats = await AiTaskRepository(session).list_by_gate(gate_id, "generate_feature_spec")
+        latest = _latest_by_seq(feats)
+        # seq2(review-manage)는 supplement가 아니라(concept이므로) disambiguate create
+        assert latest[2].payload["suggestion_type"] == "create_feature_spec"
+        assert latest[2].payload[PLAN_ITEM_KEY]["filename_candidate"] == "the-sc-review-manage.md"
+        revision = await GateRepository(session).get_revision(rev_id)
+        main_md = revision.payload["form"]["document_draft"]["markdown_full"]
+        # 원본요약 링크가 concept이 아니라 disambiguate된 feature를 가리킨다
+        assert "[[the-sc-review-manage]]" in main_md
+        assert "[[review-manage]]" not in main_md
+
+    # 승인 → apply: DUPLICATE_STEM 없이 통과, concept 불변
+    async with session_factory() as session:
+        await GateService(session).approve(gate_id)  # ApplyValidationError 안 나야 함
+        await session.commit()
+    async with session_factory() as session:
+        docs = DocumentRepository(session)
+        concept = await docs.get_by_stem("review-manage")
+        assert concept.document_type == "concept"  # 침범 안 됨
+        assert concept.path == "permanent/concepts/review-manage.md"
+        assert concept.version == 1  # 업그레이드/overwrite 안 됨
+        # disambiguate된 feature는 별개 문서로 생성
+        feat = await docs.get_by_stem("the-sc-review-manage")
+        assert feat is not None and feat.document_type == "feature_spec"
+        src = await SourceRepository(session).get(sid)
+        assert src.status == "documented"  # apply 성공
+
+
+# ---------------------------------------------------------------------------
+# within-plan 중복 stem → 규칙대로(둘째는 매칭 없으면 disambiguate)
+# ---------------------------------------------------------------------------
+
+
+def test_within_plan_duplicate_disambiguates(markdown_root: Path) -> None:
+    root = MarkdownRoot(str(markdown_root))
+    # 인덱스 비어 있음. 같은 fanout에서 'cal'이 두 번 나오는 상황.
+    assigned: set = set()
+    a1 = _resolve_feature_target("cal", "the-sc", {}, {}, assigned, root)
+    assert a1.suggestion_type == "create_feature_spec" and a1.final_stem == "cal"
+    assigned.add(a1.final_stem)
+    a2 = _resolve_feature_target("cal", "the-sc", {}, {}, assigned, root)
+    # 둘째는 앞 기능과 충돌 → disambiguate(within-plan은 원본요약 재작성 대상 아님)
+    assert a2.suggestion_type == "create_feature_spec"
+    assert a2.final_stem == "the-sc-cal" and a2.remap_main is False

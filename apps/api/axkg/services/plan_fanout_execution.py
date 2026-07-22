@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -63,6 +65,8 @@ FEATURE_TASK_TYPE = "generate_feature_spec"
 CORP_KEY = "corp"
 CREATE_FEATURE_SPEC = "create_feature_spec"
 SUPPLEMENT_FEATURE = "supplement_existing_feature"
+# 충돌 disambiguate로 바뀐 feature stem 재매핑(orig→final) — 원본요약 `## 기능 목록` 링크 재작성용.
+STEM_REMAP_KEY = "feature_stem_remap"
 # 기능 task 병렬 상한(worker concurrency). 너무 크면 open-kknaks/모델에 부담이라 보수적으로.
 FANOUT_CONCURRENCY = 5
 # 기존 기능정의서 전문 주입 상한(문자). supplement 병합의 재료.
@@ -159,27 +163,43 @@ async def _spawn_feature_tasks(
     ).stem
     corp = plan_task.payload.get(CORP_KEY)
 
-    # corp 기존 기능정의서 index(같은 corp 한정) — dedup 매칭 기준.
-    existing_specs = corp_feature_specs(
-        await DocumentRepository(session).list_all(), corp
-    )
+    # 전체 index로 stem 충돌을 검사한다(dedup 매칭 + 충돌 폴백). corp_specs는 같은 corp의
+    # 기존 기능정의서(supplement 대상)만, existing_by_stem은 전 타입/전 corp(충돌 판정).
+    all_docs = await DocumentRepository(session).list_all()
+    existing_by_stem = {d.stem: d for d in all_docs}
+    corp_specs = corp_feature_specs(all_docs, corp)
 
-    # corp·요약 stem을 revision에 보관(fan-in·재시도가 재사용).
-    payload = dict(revision.payload or {})
-    payload[CORP_KEY] = corp
-    payload[SOURCE_SUMMARY_STEM_KEY] = summary_stem
-    await gates.update_revision(revision_id, payload=payload)
+    assigned: set[str] = set()  # 이 fanout에서 이미 배정된 최종 stem(within-plan 충돌 방지)
+    stem_remap: dict[str, str] = {}  # disambiguate로 바뀐 create의 orig→final(원본요약 링크 재작성)
 
     task_ids: list[uuid.UUID] = []
     for item in plan:
+        orig = _feature_stem(item.get("filename_candidate"))
+        assignment = _resolve_feature_target(
+            orig, corp, existing_by_stem, corp_specs, assigned, root
+        )
+        plan_item = dict(item)
         item_payload = {
             "kind": "feature_spec",
-            PLAN_ITEM_KEY: item,
+            PLAN_ITEM_KEY: plan_item,
             SOURCE_SUMMARY_STEM_KEY: summary_stem,
             CORP_KEY: corp,
             "destination_type": "project",
         }
-        _apply_dedup_branch(item, existing_specs, root, item_payload)
+        if assignment.suggestion_type == SUPPLEMENT_FEATURE:
+            item_payload[SUGGESTION_TYPE_KEY] = SUPPLEMENT_FEATURE
+            item_payload[TARGET_STEM_KEY] = assignment.target_stem
+            item_payload[EXISTING_SPEC_MARKDOWN_KEY] = assignment.existing_md
+            assigned.add(orig)
+        else:
+            item_payload[SUGGESTION_TYPE_KEY] = CREATE_FEATURE_SPEC
+            if assignment.final_stem != orig:
+                # 충돌 회피: 시스템이 파일명 stem을 바꾼다(기존 문서 불변). 원본요약 `## 기능
+                # 목록`의 [[orig]]도 finalize에서 [[final]]로 재작성해 링크 정합을 맞춘다.
+                plan_item["filename_candidate"] = f"{assignment.final_stem}.md"
+                if assignment.remap_main:
+                    stem_remap[orig] = assignment.final_stem
+            assigned.add(assignment.final_stem)
         task = await service.create_task(
             FEATURE_TASK_TYPE,
             source_id=plan_task.source_id,
@@ -188,35 +208,107 @@ async def _spawn_feature_tasks(
             payload=item_payload,
         )
         task_ids.append(task.id)
+
+    # corp·요약 stem·stem 재매핑을 revision에 보관(fan-in·재시도가 재사용).
+    payload = dict(revision.payload or {})
+    payload[CORP_KEY] = corp
+    payload[SOURCE_SUMMARY_STEM_KEY] = summary_stem
+    payload[STEM_REMAP_KEY] = stem_remap
+    await gates.update_revision(revision_id, payload=payload)
     return task_ids
 
 
-def _apply_dedup_branch(
-    item: dict, existing_specs: dict, root: MarkdownRoot, item_payload: dict
-) -> None:
-    """plan 기능이 기존 corp 기능과 같으면 supplement, 아니면 create로 payload를 분기한다.
+@dataclass
+class _FeatureAssignment:
+    """한 plan 기능의 배정 결과 — supplement(기존 업그레이드) 또는 create(충돌 시 disambiguate)."""
 
-    stem 정확 매칭(= plan이 기존 stem 재사용). 기존 전문을 읽어 supplement 재료로 싣는다.
-    전문을 못 읽으면 안전하게 create로 폴백(무근거 overwrite 금지).
-    """
-    stem = _feature_stem(item.get("filename_candidate"))
-    existing = existing_specs.get(stem)
-    if not existing:
-        item_payload[SUGGESTION_TYPE_KEY] = CREATE_FEATURE_SPEC
-        return
-    existing_md = ""
+    suggestion_type: str
+    final_stem: str
+    target_stem: str | None = None
+    existing_md: str | None = None
+    remap_main: bool = False  # 원본요약 [[orig]]→[[final]] 재작성 필요(기존 인덱스 충돌 회피분)
+
+
+def _read_existing_spec(root: MarkdownRoot, path: str) -> str:
     try:
-        if root.exists(existing["path"]):
-            existing_md = root.read_text(existing["path"])
+        return root.read_text(path) if root.exists(path) else ""
     except OSError:
-        existing_md = ""
-    if not existing_md.strip():
-        # 기존 전문 부재/읽기 실패 → 애매하므로 신규 생성 폴백(SPEC-014 안전 폴백).
-        item_payload[SUGGESTION_TYPE_KEY] = CREATE_FEATURE_SPEC
-        return
-    item_payload[SUGGESTION_TYPE_KEY] = SUPPLEMENT_FEATURE
-    item_payload[TARGET_STEM_KEY] = stem
-    item_payload[EXISTING_SPEC_MARKDOWN_KEY] = existing_md[:_EXISTING_SPEC_CAP]
+        return ""
+
+
+def _disambiguate(orig: str, corp: str | None, taken: set[str]) -> str:
+    """충돌 없는 feature stem을 만든다 — `{corp}-` 프리픽스 우선, 이미 쓰였으면 `-2`… suffix.
+
+    corp 네임스페이스로 전역 concept/reference·타 corp와 원천 비충돌시키고, 그래도 겹치면
+    번호 suffix로 유일하게 만든다. `taken`은 인덱스 stem ∪ 이번 fanout 배정 stem.
+    """
+    base = orig if (corp and orig.startswith(f"{corp}-")) else (
+        f"{corp}-{orig}" if corp else orig
+    )
+    if base not in taken and base != orig:
+        return base
+    root_stem = base if base != orig else orig
+    if root_stem not in taken:
+        return root_stem
+    n = 2
+    while f"{root_stem}-{n}" in taken:
+        n += 1
+    return f"{root_stem}-{n}"
+
+
+def _resolve_feature_target(
+    orig: str,
+    corp: str | None,
+    existing_by_stem: dict,
+    corp_specs: dict,
+    assigned: set[str],
+    root: MarkdownRoot,
+) -> _FeatureAssignment:
+    """plan 기능 stem을 supplement/create로 배정한다(충돌 폴백 포함, AXKG-SPEC-014 Feature Dedup).
+
+    우선순위:
+    1) **같은 corp의 current feature_spec와 stem 일치** → `supplement_existing_feature`
+       (기존 전문 주입, 병합 업그레이드). 단 전문을 못 읽으면 supplement하지 않고 아래로.
+    2) **인덱스의 다른 문서(concept/reference/permanent/baseline/company/context 또는 다른 corp
+       feature)와 충돌** → 그 문서는 **절대 안 건드리고** feature stem을 disambiguate해 create
+       (DUPLICATE_STEM 방지). concept-supplement 가드는 침범하지 않는다.
+    3) **같은 fanout 내 앞 기능과 stem 충돌**(within-plan) → disambiguate create.
+    4) 충돌 없음 → create.
+    """
+    existing_feat = corp_specs.get(orig)
+    if existing_feat:
+        md = _read_existing_spec(root, existing_feat["path"])
+        if md.strip():
+            return _FeatureAssignment(
+                SUPPLEMENT_FEATURE, orig, target_stem=orig,
+                existing_md=md[:_EXISTING_SPEC_CAP],
+            )
+    # supplement하지 않음(같은 corp 매칭 없음/전문 못 읽음). 충돌이면 disambiguate.
+    taken = set(existing_by_stem) | assigned
+    if orig in existing_by_stem:
+        return _FeatureAssignment(
+            CREATE_FEATURE_SPEC, _disambiguate(orig, corp, taken), remap_main=True
+        )
+    if orig in assigned:  # within-plan 중복(앞 기능이 이미 씀)
+        return _FeatureAssignment(CREATE_FEATURE_SPEC, _disambiguate(orig, corp, taken))
+    return _FeatureAssignment(CREATE_FEATURE_SPEC, orig)
+
+
+def _rewrite_main_links(markdown: str, stem_remap: dict) -> str:
+    """원본요약 본문의 `[[orig]]`/`[[orig|label]]`를 disambiguate된 `[[final]]`로 재작성한다."""
+    if not stem_remap:
+        return markdown
+
+    def _repl(match: re.Match) -> str:
+        inner = match.group(1)
+        target, sep, label = inner.partition("|")
+        tstem = target.split("#", 1)[0].strip()
+        if tstem in stem_remap:
+            new = stem_remap[tstem]
+            return f"[[{new}|{label}]]" if sep else f"[[{new}]]"
+        return match.group(0)
+
+    return re.sub(r"\[\[([^\[\]\n]+?)\]\]", _repl, markdown)
 
 
 async def _execute_feature_task(
@@ -372,10 +464,15 @@ async def finalize_fanout(
                 }
             )
         else:
+            # 파일명 stem은 **시스템이 spawn에서 정한 값**(충돌 disambiguate 반영)을 쓴다 — LLM
+            # 출력 filename에 의존하지 않아야 회피가 확실하다(fallback으로만 draft 사용).
+            create_fc = (task.payload.get(PLAN_ITEM_KEY) or {}).get(
+                "filename_candidate"
+            ) or draft.get("filename_candidate")
             derived.append(
                 {
                     "suggestion_type": CREATE_FEATURE_SPEC,
-                    "filename_candidate": draft["filename_candidate"],
+                    "filename_candidate": create_fc,
                     "draft_markdown": spec_md,
                     "link_reason": item.get("summary") or "요구 1항목=1장(기능정의서)",
                 }
@@ -388,6 +485,10 @@ async def finalize_fanout(
     pruned_main = _prune_failed_feature_links(
         main_draft.get("markdown_full", ""), failed_stems
     )
+    # 충돌로 disambiguate된 create 기능의 원본요약 `## 기능 목록` 링크를 최종 stem으로 재작성한다
+    # ([[orig]]→[[final]]) — 안 하면 원본요약 링크가 충돌 문서(concept 등)나 없는 stem을 가리킨다.
+    stem_remap = (revision.payload or {}).get(STEM_REMAP_KEY) or {}
+    pruned_main = _rewrite_main_links(pruned_main, stem_remap)
     # up: 회사 루트 체인(WORK-013 P4/P5): 원본요약 → up:[{corp}] + 본문 [[{corp}]].
     main_draft["markdown_full"] = apply_document_anchor(
         pruned_main, document_type="baseline", up_target=corp or None
