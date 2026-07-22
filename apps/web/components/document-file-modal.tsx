@@ -17,6 +17,7 @@ import {
 import { parseFrontmatter, type FrontmatterField } from "@/lib/frontmatter";
 import { MarkdownView } from "@/components/markdown-view";
 
+// document-graph.tsx 의 TYPE_COLOR 와 정합(색 SSOT 동기화). WORK-013 신규 타입 포함.
 const TYPE_COLOR: Record<string, string> = {
   reference: "hsl(142 71% 45%)",
   resource: "hsl(142 71% 45%)",
@@ -25,6 +26,9 @@ const TYPE_COLOR: Record<string, string> = {
   area: "hsl(217 91% 60%)",
   project: "hsl(217 91% 60%)",
   baseline: "hsl(38 92% 50%)",
+  feature_spec: "hsl(22 90% 52%)",
+  context: "hsl(174 72% 40%)",
+  company: "hsl(330 81% 56%)",
 };
 function typeColor(type: string): string {
   return TYPE_COLOR[type] ?? "hsl(0 0% 45%)";
@@ -335,6 +339,23 @@ export function DocumentFileModal({
   const raw = meta?.markdown_full ?? null;
   // frontmatter를 분리해 메타 블록으로, 본문만 MarkdownView로 렌더(파싱 실패 시 원문 fallback).
   const parsed = useMemo(() => (raw ? parseFrontmatter(raw) : null), [raw]);
+  const fmFields = useMemo(() => parsed?.fields ?? [], [parsed]);
+
+  // 상단 메타의 UP(상류)은 /documents/{id} 프론트매터가 아니라 /documents/{id}/links 의 up 에서 읽는다
+  // (프론트매터 up 은 비어 "—" 로만 떠서 그래프 상류가 안 보였던 문제 fix). aliases/tags 는 상세 응답
+  // 프론트매터 필드 그대로 둔다(빈 배열이면 "—" 가 정상). 관련링크 패널과 동일 소스(links.up)로 정합.
+  const upLabels = useMemo(
+    () => (links?.up ?? []).map((l) => l.title || l.label || l.target).filter(Boolean),
+    [links],
+  );
+  const metaFields = useMemo<FrontmatterField[]>(() => {
+    if (!links) return fmFields; // 링크 미로딩(실패 포함) 시 프론트매터 그대로 둔다.
+    const upField: FrontmatterField = { key: "up", value: { kind: "list", items: upLabels } };
+    if (fmFields.some((f) => f.key === "up")) {
+      return fmFields.map((f) => (f.key === "up" ? upField : f));
+    }
+    return upLabels.length > 0 ? [upField, ...fmFields] : fmFields;
+  }, [fmFields, upLabels, links]);
 
   if (!documentId) return null;
 
@@ -347,7 +368,6 @@ export function DocumentFileModal({
     assocBacklinks.length > 0 ||
     (links?.wikilinks.length ?? 0) > 0;
   const body = parsed?.body ?? null;
-  const fmFields = parsed?.fields ?? [];
 
   return (
     <div
@@ -409,7 +429,7 @@ export function DocumentFileModal({
               <p className="text-xs text-destructive">{error}</p>
             ) : body !== null ? (
               <>
-                {fmFields.length > 0 && <FrontmatterBlock fields={fmFields} />}
+                {metaFields.length > 0 && <FrontmatterBlock fields={metaFields} />}
                 <MarkdownView markdown={body} />
               </>
             ) : (

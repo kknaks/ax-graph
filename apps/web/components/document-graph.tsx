@@ -26,6 +26,8 @@ const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
 }) as unknown as ComponentType<Record<string, unknown>>;
 
 // document_type → 노드 색. 알 수 없는 타입은 muted 회색으로 폴백.
+// WORK-013 신규: company(회사 루트 앵커 — 가장 눈에 띄는 자홍/로즈 허브색), context(회사 배경 — 틸),
+// feature_spec(기능정의서 — baseline 계열과 조화되는 오렌지, 구분).
 const TYPE_COLOR: Record<string, string> = {
   reference: "hsl(142 71% 45%)",
   resource: "hsl(142 71% 45%)",
@@ -34,6 +36,9 @@ const TYPE_COLOR: Record<string, string> = {
   area: "hsl(217 91% 60%)",
   project: "hsl(217 91% 60%)",
   baseline: "hsl(38 92% 50%)",
+  feature_spec: "hsl(22 90% 52%)",
+  context: "hsl(174 72% 40%)",
+  company: "hsl(330 81% 56%)",
 };
 function typeColor(type: string): string {
   return TYPE_COLOR[type] ?? "hsl(0 0% 45%)";
@@ -237,22 +242,39 @@ export function DocumentGraph({ onSelectNode, focusRequest }: DocumentGraphProps
     (node: FGNode, ctx: CanvasRenderingContext2D, scale: number) => {
       const x = node.x ?? 0;
       const y = node.y ?? 0;
-      const r = 5;
+      // 회사 루트(company)는 허브 앵커라 반지름을 키우고 후광 링으로 강조 — 회색 기능노드 사이에서 확 띈다.
+      const isCompany = node.document_type === "company";
+      const color = typeColor(node.document_type);
+      const r = isCompany ? 9 : 5;
+      if (isCompany) {
+        // 후광(반투명 링) — 허브임을 표현(과하지 않게).
+        ctx.beginPath();
+        ctx.arc(x, y, r + 3.5, 0, 2 * Math.PI);
+        ctx.fillStyle = "hsl(330 81% 56% / 0.18)";
+        ctx.fill();
+      }
       ctx.beginPath();
       ctx.arc(x, y, r, 0, 2 * Math.PI);
-      ctx.fillStyle = typeColor(node.document_type);
+      ctx.fillStyle = color;
       ctx.fill();
+      if (isCompany) {
+        // 흰 테두리로 앵커 강조(선택 여부와 무관하게 항상).
+        ctx.strokeStyle = "hsl(0 0% 100%)";
+        ctx.lineWidth = 2 / scale;
+        ctx.stroke();
+      }
       if (node.id === selectedId) {
         ctx.strokeStyle = "hsl(0 0% 9%)";
         ctx.lineWidth = 2 / scale;
         ctx.stroke();
       }
       const label = node.title || node.stem;
-      const fontSize = Math.max(10 / scale, 2);
-      ctx.font = `${fontSize}px Inter, Pretendard, sans-serif`;
+      // company 라벨은 조금 크게·굵게(허브 가독성).
+      const fontSize = Math.max((isCompany ? 12 : 10) / scale, 2);
+      ctx.font = `${isCompany ? "600 " : ""}${fontSize}px Inter, Pretendard, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillStyle = "hsl(0 0% 20%)";
+      ctx.fillStyle = isCompany ? "hsl(330 70% 32%)" : "hsl(0 0% 20%)";
       ctx.fillText(label, x, y + r + 1);
     },
     [selectedId],
@@ -265,10 +287,13 @@ export function DocumentGraph({ onSelectNode, focusRequest }: DocumentGraphProps
   // project 문서는 document_type=baseline으로 렌더되므로 한 항목으로 묶고,
   // archive는 문서를 만들지 않아 노드가 없지만 완결성 위해 회색으로 표기한다.
   const legendItems: { key: string; label: string }[] = [
+    { key: "company", label: "company(회사 루트)" },
     { key: "reference", label: "reference" },
     { key: "permanent", label: "permanent" },
     { key: "concept", label: "concept" },
     { key: "baseline", label: "project(baseline)" },
+    { key: "feature_spec", label: "기능정의서" },
+    { key: "context", label: "context" },
     { key: "archive", label: "archive" },
   ];
 
