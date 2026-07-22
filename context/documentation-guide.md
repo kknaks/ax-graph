@@ -51,6 +51,8 @@
 
     > **생성 방식 = plan-then-fanout**(AXKG-DEC-008/WORK-012). project 문서화 초안은 한 AI 호출로 원본요약+기능 N장을 통째 생성하지 않는다 — ① `plan_project`가 docx→**원본요약 + 기능목록(plan=`[{seq,기능명,요지}]`)** 을 가볍게 산출하고, ② plan의 각 기능마다 **독립 task(`generate_feature_spec`)가 병렬로 기능정의서 1장씩** 생성하며, ③ N개 draft를 **fan-in**해 위 게이트 revision(main+derived)으로 조립한다. 산출 계약(원본요약+기능정의서 N, main+derived, 경로·3층)은 **불변**이고 바뀌는 것은 생성 메커니즘뿐이다. 한 기능 생성이 실패하면 **그 기능만 실패 표시하고 나머지로 조립을 진행**하며(부분 진행), 실패 기능은 기능 단위로 재시도한다(11개 통째 재생성 아님). 그래서 각 `plan_project`/`generate_feature_spec` 프롬프트는 **자기 몫(원본요약+plan / 기능 1장)에만 집중**한다.
 
+    > **회사 루트 + context 층 + up: 수렴**(AXKG-DEC-009/WORK-013). 회사 프로젝트에는 **회사 루트 앵커 `projects/{corp}/{corp}.md`(document_type `company`, 회사당 1개, "프로젝트 추가" 시 생성·인덱싱)** 가 있고, 모든 산출이 `up:` 체인으로 이 루트에 수렴한다: 원본요약·context → `up: [{corp}]`, 기능정의서 → `up: [원본요약]`(→ 원본요약이 `up: [{corp}]`이라 2단 체인). `up:` + 본문 `[[{corp}]]`은 **시스템이 corp를 알고 자동 주입**한다(AI가 지어내지 않음). project 하위 분기: **요구사항**은 위 팬아웃(baseline+spec)이지만, **회사 배경지식(context)** (조직도·업무 플로우 등, intake 메모 성격 힌트로 판정)은 팬아웃 없이 `projects/{corp}/context/{문서}.md` **단일 문서**(document_type `context`)로 만든다 — 기능으로 쪼개지 마라. 상세는 `document-link-rules.md`(회사 루트 up: 체인)·AXKG-SPEC-014.
+
 - 초안 = frontmatter + 본문 + `up:`/`[[ ]]` 연결. **뼈대는 활성 템플릿, 채우는 방법은 활성 프롬프트를 따른다.**
 - 내용은 source 요약과 원문 근거 **안에서만** 채운다. 원문에 없는 사실을 지어내지 않는다.
 - **`target_path`는 AI가 정하지 않는다(시스템 조립)**: AI는 `filename_candidate`(파일명 stem)만 내고, 시스템이 위 표의 document_type→디렉토리 매핑을 붙여 최종 경로를 조립한다. 재문서화(같은 source 재생성)면 기존 main 경로를 재사용해 파일명이 흔들려도 경로가 바뀌지 않는다. 위 표는 이제 **시스템의 매핑 설명**이다 — executor의 `PATH_NOT_ALLOWED`는 조립 경로에 대한 안전망으로 남는다.

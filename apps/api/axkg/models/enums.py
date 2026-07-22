@@ -51,6 +51,10 @@ DOCUMENT_TYPE = (
     "baseline",
     # 회사 프로젝트 팬아웃 기능정의서 (AXKG-SPEC-014/010, WP11). projects/{corp}/spec/ 파생.
     "feature_spec",
+    # 회사 루트 앵커 문서 projects/{corp}/{corp}.md (AXKG-DEC-009/WORK-013). up-target 허브.
+    "company",
+    # 회사 배경지식 단일 문서 projects/{corp}/context/{문서}.md (AXKG-DEC-009/WORK-013).
+    "context",
     "decision",
     "spec",
     "work",

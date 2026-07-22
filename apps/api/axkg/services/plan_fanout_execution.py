@@ -33,6 +33,7 @@ from axkg.repositories.gates import GateRepository
 from axkg.repositories.sources import SourceRepository
 from axkg.services.ai import AiExecutionService, ContextBuilderRegistry
 from axkg.services.ai.documentation_gate import wrap_documentation_output
+from axkg.services.document_anchor import apply_document_anchor
 from axkg.services.ai.feature_spec import (
     FEATURE_RESULT_KEY,
     PLAN_ITEM_KEY,
@@ -269,6 +270,9 @@ async def finalize_fanout(
         return False
     plan = plan_output.get("plan") or []
     corp = (revision.payload or {}).get(CORP_KEY)
+    summary_stem = (revision.payload or {}).get(SOURCE_SUMMARY_STEM_KEY) or _feature_stem(
+        (plan_output.get("document_draft") or {}).get("filename_candidate")
+    )
 
     feature_tasks = await tasks_repo.list_by_gate(gate_id, FEATURE_TASK_TYPE)
     latest = _latest_by_seq(feature_tasks)
@@ -298,11 +302,16 @@ async def finalize_fanout(
             if stem:
                 failed_stems.add(stem)
             continue
+        # up: 회사 루트 체인(WORK-013 P5): spec → up:[원본요약 stem] + 본문 [[원본요약]].
+        # 원본요약이 다시 up:[{corp}]이므로 spec→원본요약→{corp} 2단 체인으로 회사 루트에 수렴.
+        spec_md = apply_document_anchor(
+            draft["markdown_full"], document_type="feature_spec", up_target=summary_stem
+        )
         derived.append(
             {
                 "suggestion_type": "create_feature_spec",
                 "filename_candidate": draft["filename_candidate"],
-                "draft_markdown": draft["markdown_full"],
+                "draft_markdown": spec_md,
                 "link_reason": item.get("summary") or "요구 1항목=1장(기능정의서)",
             }
         )
@@ -311,8 +320,12 @@ async def finalize_fanout(
     # 원본요약(main)은 plan_output 원본에서 복사해, 이번에 실패/미완인 기능 링크만 제거한다.
     # (plan_output은 revision에 원본 그대로 유지 — 재시도 성공 시 재조립에서 그 링크가 되살아난다.)
     main_draft = dict(plan_output.get("document_draft") or {})
-    main_draft["markdown_full"] = _prune_failed_feature_links(
+    pruned_main = _prune_failed_feature_links(
         main_draft.get("markdown_full", ""), failed_stems
+    )
+    # up: 회사 루트 체인(WORK-013 P4/P5): 원본요약 → up:[{corp}] + 본문 [[{corp}]].
+    main_draft["markdown_full"] = apply_document_anchor(
+        pruned_main, document_type="baseline", up_target=corp or None
     )
     output = {
         "document_draft": main_draft,

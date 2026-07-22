@@ -297,11 +297,17 @@ async def test_documentation_extra_payload_binds_corp(
         )
         gate_service = GateService(s)
         extra = gate_service._documentation_extra_payload("project", src)
-        assert extra == {"destination_type": "project", "corp": "the-sc"}
+        # WORK-013: project는 sub-type(requirement 기본)도 함께 실린다.
+        assert extra == {
+            "destination_type": "project",
+            "corp": "the-sc",
+            "project_subtype": "requirement",
+        }
         # 매칭 프로젝트 없는 회사명이면 corp 미바인딩(팬아웃 skip)
         src2 = SourceDTO(**{**src.model_dump(), "metadata": {INTAKE_NOTE_KEY: "no-such-co"}})
         assert gate_service._documentation_extra_payload("project", src2) == {
-            "destination_type": "project"
+            "destination_type": "project",
+            "project_subtype": "requirement",
         }
         # project가 아니면 corp 로직 자체를 타지 않는다
         assert gate_service._documentation_extra_payload("resource", src) == {
@@ -427,10 +433,17 @@ async def test_create_project_scaffold_and_tree(
     headers = await _headers(client)
     res = await client.post("/projects", json={"name": "The SC"}, headers=headers)
     assert res.status_code == 201, res.text
-    assert res.json() == {"slug": "the-sc", "created": True, "merged": False}
-    # 3층 디렉토리가 실제로 생성됨
-    for sub in ("origin", "baseline", "spec"):
+    # WORK-013: 회사 루트 {corp}.md 경로도 반환된다.
+    assert res.json() == {
+        "slug": "the-sc",
+        "created": True,
+        "merged": False,
+        "root_path": "projects/the-sc/the-sc.md",
+    }
+    # 4층 디렉토리(context 포함) + 회사 루트 문서 생성
+    for sub in ("origin", "baseline", "spec", "context"):
         assert (markdown_root / f"projects/the-sc/{sub}").is_dir()
+    assert (markdown_root / "projects/the-sc/the-sc.md").is_file()
     # 목록·트리 조회
     listing = await client.get("/projects", headers=headers)
     assert listing.json() == {"projects": [{"corp": "the-sc"}]}
@@ -438,7 +451,7 @@ async def test_create_project_scaffold_and_tree(
     assert tree.status_code == 200
     assert tree.json() == {
         "corp": "the-sc",
-        "folders": {"origin": [], "baseline": [], "spec": []},
+        "folders": {"origin": [], "baseline": [], "spec": [], "context": []},
     }
 
 
@@ -455,7 +468,13 @@ async def test_create_project_conflict_branches(
     merged = await client.post(
         "/projects", json={"name": "The SC", "on_conflict": "merge"}, headers=headers
     )
-    assert merged.json() == {"slug": "the-sc", "created": False, "merged": True}
+    # merge는 기존 회사 루트를 보존한다 → root_path=None(새로 쓰지 않음).
+    assert merged.json() == {
+        "slug": "the-sc",
+        "created": False,
+        "merged": True,
+        "root_path": None,
+    }
     # create_new → suffix 신규
     new = await client.post(
         "/projects", json={"name": "The SC", "on_conflict": "create_new"}, headers=headers

@@ -22,7 +22,15 @@ PROJECTS_DIR = "projects"
 ORIGIN = "origin"
 BASELINE = "baseline"
 SPEC = "spec"
-CORP_SUBDIRS = (ORIGIN, BASELINE, SPEC)
+# 회사 배경지식(조직·업무 플로우 등) 단일 문서 층 (AXKG-DEC-009/WORK-013).
+CONTEXT = "context"
+CORP_SUBDIRS = (ORIGIN, BASELINE, SPEC, CONTEXT)
+# 회사 루트/context document_type (AXKG-DEC-009 — 신규 타입 기본).
+COMPANY_DOCUMENT_TYPE = "company"
+CONTEXT_DOCUMENT_TYPE = "context"
+# project 하위 sub-type (AXKG-DEC-009 D2).
+SUBTYPE_REQUIREMENT = "requirement"
+SUBTYPE_CONTEXT = "context"
 # origin 첨부 원본 업로드 시 임시 보관(corp 미확정 단계). corp 매칭·게이트 승인 시 finalize된다.
 # `.`으로 시작해 corp 목록·트리에서 자연 제외되고, *.docx라 iter_markdown(=*.md) 스캔에도 안 든다.
 ORIGIN_STAGING_DIR = f"{PROJECTS_DIR}/.origin-staging"
@@ -65,6 +73,20 @@ def project_spec_path(corp: str, filename: str) -> str:
     if not corp or not filename:
         return ""
     return f"{corp_subdir(corp, SPEC)}/{filename}"
+
+
+def project_context_path(corp: str, filename: str) -> str:
+    """회사 context 단일 문서 경로 = projects/{corp}/context/{stem}.md (WORK-013). 없으면 ""."""
+    if not corp or not filename:
+        return ""
+    return f"{corp_subdir(corp, CONTEXT)}/{filename}"
+
+
+def company_root_path(corp: str) -> str:
+    """회사 루트 앵커 경로 = projects/{corp}/{corp}.md (WORK-013). corp의 stem은 corp 자체."""
+    if not corp:
+        return ""
+    return f"{corp_dir(corp)}/{corp}.md"
 
 
 def origin_final_path(corp: str, filename: str) -> str:
@@ -163,17 +185,56 @@ def slug_preview(root, name: str) -> dict:
     return {"slug": slug, "conflict": is_corp_project_dir(root, slug)}
 
 
-def create_scaffold(root, name: str, on_conflict: str | None = None) -> dict:
-    """회사 프로젝트 스캐폴드를 **수동·독립** 생성한다(AXKG-SPEC-014 U-1/U-2, WP11 Phase 5).
+def company_root_markdown(slug: str, name: str, *, domain: str | None = None,
+                          intro: str | None = None) -> str:
+    """회사 루트 앵커 `{corp}.md` 본문 (WORK-013). document_type=company, stem={slug}.
+
+    회사당 1개의 안정적 앵커(요구 docx가 늘어도 불변). 모든 산출(baseline·context)이 `up:`으로
+    이 문서(stem={slug})에 수렴한다(AXKG-DEC-009 D3). display 회사명은 alias로 둬 `[[회사명]]`도
+    resolve된다.
+    """
+    display = (name or "").strip() or slug
+    intro_line = (intro or "").strip() or "회사 배경 정보."
+    domain_line = (domain or "").strip() or "-"
+    return (
+        "---\n"
+        f"type: {COMPANY_DOCUMENT_TYPE}\n"
+        f"title: {display}\n"
+        f"aliases: [{display}]\n"
+        "tags: []\n"
+        "up: []\n"
+        "---\n\n"
+        f"# {display}\n\n"
+        f"{intro_line}\n\n"
+        f"- 도메인: {domain_line}\n\n"
+        "## 회사 요약\n\n"
+        "<!-- 이 회사의 요구사항(baseline/spec)과 배경지식(context)이 모두 이 루트로 수렴한다. -->\n"
+    )
+
+
+def _write_company_root(root, slug: str, name: str, domain: str | None,
+                        intro: str | None) -> str | None:
+    """회사 루트 문서를 없을 때만 쓴다(멱등, 기존 앵커 보존). 쓴 경우 rel 경로, 이미 있으면 None."""
+    rel = company_root_path(slug)
+    if root.exists(rel):
+        return None
+    root.write_new(rel, company_root_markdown(slug, name, domain=domain, intro=intro))
+    return rel
+
+
+def create_scaffold(root, name: str, on_conflict: str | None = None, *,
+                    domain: str | None = None, intro: str | None = None) -> dict:
+    """회사 프로젝트 스캐폴드 + **회사 루트 앵커 `{corp}.md`** 를 생성한다(WORK-013, DEC-009 D1).
 
     - 빈 회사명 → EmptyCorpNameError.
-    - 충돌 없음 → projects/{slug}/{origin,baseline,spec}/ 생성, {slug, created:True}.
+    - 충돌 없음 → projects/{slug}/{origin,baseline,spec,context}/ + {slug}.md 생성, {slug, created}.
     - 충돌 + on_conflict 미지정 → SlugConflictError(409, 사용자 결정 요구 분기).
-    - 충돌 + merge → 기존 corp에 합류(디렉토리 멱등 보장), {slug, merged:True}.
-    - 충돌 + create_new → {slug}-2 등 suffix 신규 생성, {slug: newslug, created:True}.
+    - 충돌 + merge → 기존 corp에 합류(디렉토리 멱등, 루트는 기존 보존), {slug, merged}.
+    - 충돌 + create_new → {slug}-2 등 suffix 신규 생성 + 루트, {slug: newslug, created}.
     - on_conflict가 merge/create_new 외 값 → InvalidOnConflictError.
 
-    업로드/분류와 별개인 수동 작업이다 — 자동 생성이 아니다(AXKG-DEC-007 D2 회사 경계는 사람이 통제).
+    반환 dict에 `root_path`(새로 쓴 회사 루트 rel 경로, 있으면)를 실어 라우트가 인덱싱하게 한다.
+    업로드/분류와 별개인 수동 작업이다(AXKG-DEC-007 D2 회사 경계는 사람이 통제).
     """
     slug = slugify(name)
     if not slug:
@@ -181,17 +242,42 @@ def create_scaffold(root, name: str, on_conflict: str | None = None) -> dict:
     conflict = is_corp_project_dir(root, slug)
     if not conflict:
         _ensure_corp_dirs(root, slug)
-        return {"slug": slug, "created": True}
+        root_path = _write_company_root(root, slug, name, domain, intro)
+        return {"slug": slug, "created": True, "root_path": root_path}
     if on_conflict is None:
         raise SlugConflictError(slug)
     if on_conflict == _ON_CONFLICT_MERGE:
         _ensure_corp_dirs(root, slug)
-        return {"slug": slug, "merged": True}
+        root_path = _write_company_root(root, slug, name, domain, intro)  # 없을 때만
+        return {"slug": slug, "merged": True, "root_path": root_path}
     if on_conflict == _ON_CONFLICT_CREATE_NEW:
         new_slug = _next_free_suffix_slug(root, slug)
         _ensure_corp_dirs(root, new_slug)
-        return {"slug": new_slug, "created": True}
+        root_path = _write_company_root(root, new_slug, name, domain, intro)
+        return {"slug": new_slug, "created": True, "root_path": root_path}
     raise InvalidOnConflictError
+
+
+# project 하위 sub-type 판정 — 메모 성격 힌트 우선 (AXKG-DEC-009 D2). 아래 힌트가 메모에 있으면
+# context, 없으면 requirement(안전 폴백 — DEC-009 OQ 확정: 오분류 시 팬아웃 누락<노이즈).
+_CONTEXT_MEMO_HINTS = (
+    "context", "컨텍스트", "회사 정보", "회사정보", "회사 소개", "회사소개",
+    "배경지식", "배경 지식", "배경 정보", "배경정보", "조직도", "조직 정보", "조직도야",
+    "업무 플로우", "업무플로우", "워크플로우", "업무 흐름", "휴가", "vacation",
+)
+
+
+def resolve_project_subtype(memo: str | None) -> str:
+    """intake 메모의 성격 힌트로 requirement/context를 판정한다(AXKG-DEC-009 D2, WORK-013 P2).
+
+    메모 성격 힌트를 **우선 신호**로 쓴다(예: "SC 회사 정보야" → context). 힌트가 없으면
+    안전 폴백 **requirement**(기존 팬아웃 경로) — 오분류 비용상 context를 기능으로 쪼개는 노이즈
+    보다 요구를 팬아웃 누락하는 게 크다는 판단(DEC-009 OQ 확정). 내용 기반 AI 판단은 후속.
+    """
+    text = (memo or "").lower()
+    if any(hint in text for hint in _CONTEXT_MEMO_HINTS):
+        return SUBTYPE_CONTEXT
+    return SUBTYPE_REQUIREMENT
 
 
 def _list_md_stems(root, corp: str, sub: str) -> list[str]:

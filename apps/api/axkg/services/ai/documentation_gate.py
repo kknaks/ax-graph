@@ -39,9 +39,13 @@ from axkg.services.document_paths import (
     normalize_filename,
 )
 from axkg.services.project_scaffold import (
+    CONTEXT_DOCUMENT_TYPE,
+    SUBTYPE_CONTEXT,
     project_baseline_path,
+    project_context_path,
     project_spec_path,
 )
+from axkg.services.document_anchor import apply_document_anchor
 from axkg.services.documents import DocumentService
 from axkg.services.graph import GraphService
 from axkg.services.qmd import QmdClient
@@ -205,6 +209,7 @@ def wrap_documentation_output(
     prior_main_path: str | None = None,
     resolve_existing_path: ResolvePathFn | None = None,
     corp: str | None = None,
+    project_subtype: str | None = None,
 ) -> dict[str, Any]:
     """스키마 통과 출력을 documentation.v1 공통 envelope로 감싼다(SPEC-002/004).
 
@@ -218,10 +223,27 @@ def wrap_documentation_output(
     """
     raw_draft = output.get("document_draft") or {}
     markdown_full = raw_draft.get("markdown_full", "")
+    # 회사 context 단일 문서(WORK-013 P3): document_type=context, projects/{corp}/context/ 경로,
+    # up:[{corp}] + 본문 [[{corp}]] 자동 배선. 팬아웃 없음(derived 무시).
+    is_context = (
+        destination_type == PROJECT_DESTINATION and project_subtype == SUBTYPE_CONTEXT
+    )
+    if is_context:
+        markdown_full = apply_document_anchor(
+            markdown_full, document_type=CONTEXT_DOCUMENT_TYPE, up_target=corp or None
+        )
     _, body = split_frontmatter(markdown_full)
     frontmatter_preview = markdown_full[: len(markdown_full) - len(body)].strip()
-    document_type = DESTINATION_DOCUMENT_TYPE.get(destination_type, "reference")
-    if destination_type == PROJECT_DESTINATION and corp:
+    document_type = (
+        CONTEXT_DOCUMENT_TYPE
+        if is_context
+        else DESTINATION_DOCUMENT_TYPE.get(destination_type, "reference")
+    )
+    if is_context and corp:
+        assembled_main = project_context_path(
+            corp, normalize_filename(raw_draft.get("filename_candidate"))
+        )
+    elif destination_type == PROJECT_DESTINATION and corp:
         assembled_main = project_baseline_path(
             corp, normalize_filename(raw_draft.get("filename_candidate"))
         )
@@ -239,10 +261,15 @@ def wrap_documentation_output(
         "body_preview": body.strip()[:_BODY_PREVIEW_LEN],
         "links": raw_draft.get("links", []),
     }
-    derived = [
-        _normalize_derived(s, resolve_existing_path, corp=corp)
-        for s in output.get("derived_suggestions", [])
-    ]
+    # context 단일 문서는 팬아웃하지 않는다 — 파생 제안을 무시한다(WORK-013 P3).
+    derived = (
+        []
+        if is_context
+        else [
+            _normalize_derived(s, resolve_existing_path, corp=corp)
+            for s in output.get("derived_suggestions", [])
+        ]
+    )
     return {
         "schema_version": FORM_SCHEMA_VERSION,
         "gate_kind": "documentation",
@@ -293,15 +320,18 @@ class DocumentationGateContextBuilder(ContextBuilder):
             raise ContextBuildError("SOURCE_NOT_FOUND", f"source 없음: {task.source_id}")
 
         destination_type = self._destination(task, source)
+        is_context = self._is_context(task)
         connection_block = await self._connection_candidates_block(source)
         concept_block = await self._concept_template_block()
         # project 팬아웃(WP11): 기능정의서 파생 뼈대(project_feature_spec)를 concept처럼 고정
-        # 동봉한다. project가 아니면 None(다른 destination엔 주입하지 않음).
+        # 동봉한다. context 단일 문서(WORK-013)나 비-project면 None(팬아웃 안 함).
         feature_spec_block = (
             await self._feature_spec_template_block()
-            if destination_type == PROJECT_DESTINATION
+            if destination_type == PROJECT_DESTINATION and not is_context
             else None
         )
+        # 회사 context 단일 문서 지침(WORK-013 P3): 기능으로 쪼개지 말고 배경지식 1장으로.
+        context_block = self._context_guidance_block() if is_context else None
 
         # stale 재생성(SPEC-004 §E-3): 사용자가 연 재생성 게이트. 입력 계약 = 대상 permanent
         # 전문 + 바뀐 concept 전문 + 변경 요지(문서당 소형 컨텍스트). 피드백 경로가 아니라
@@ -334,6 +364,7 @@ class DocumentationGateContextBuilder(ContextBuilder):
                     connection_block,
                     concept_block,
                     feature_spec_block,
+                    context_block,
                     self._feedback_block(str(feedback)),
                 ]
                 if block is not None
@@ -348,6 +379,7 @@ class DocumentationGateContextBuilder(ContextBuilder):
                 connection_block,
                 concept_block,
                 feature_spec_block,
+                context_block,
             ]
             if block is not None
         ]
@@ -355,7 +387,13 @@ class DocumentationGateContextBuilder(ContextBuilder):
     def select_template_key(
         self, task: AiTaskDTO, definition: AiTaskDefinitionDTO
     ) -> str | None:
-        """destination→template key 매핑 (SPEC-010). payload의 destination_type 사용."""
+        """destination→template key 매핑 (SPEC-010). payload의 destination_type 사용.
+
+        회사 context 단일 문서(WORK-013)는 요약① 수준 단일 md라 reference 뼈대를 재사용한다
+        (document_type은 시스템이 context로 강제, wrap/apply_document_anchor).
+        """
+        if self._is_context(task):
+            return "reference"
         destination_type = task.payload.get("destination_type")
         if destination_type in DESTINATION_TEMPLATE_KEY:
             return DESTINATION_TEMPLATE_KEY[destination_type]
@@ -397,6 +435,7 @@ class DocumentationGateContextBuilder(ContextBuilder):
             prior_main_path=prior_main.path if prior_main is not None else None,
             resolve_existing_path=resolve_existing_path,
             corp=self._corp(task),
+            project_subtype=task.payload.get("project_subtype"),
         )
         # 이 revision을 reviewable로 올리기 전에, 같은 gate의 다른 모든 reviewable 형제를
         # superseded로 sweep한다(SPEC-002 §5). 빠른 연속 재생성 병렬 완료 시 parent 단건
@@ -432,6 +471,25 @@ class DocumentationGateContextBuilder(ContextBuilder):
         (WP11 Phase 4 corp 바인딩). 없으면 None → 팬아웃 없이 flat 경로로 떨어진다."""
         corp = task.payload.get("corp")
         return str(corp) if corp else None
+
+    @staticmethod
+    def _is_context(task: AiTaskDTO) -> bool:
+        """회사 context 단일 문서 sub-type인지(WORK-013 P2). payload.project_subtype 사용."""
+        return task.payload.get("project_subtype") == SUBTYPE_CONTEXT
+
+    @staticmethod
+    def _context_guidance_block() -> AssembledBlockDTO:
+        """회사 context 단일 문서 생성 지침(WORK-013 P3). 기능으로 쪼개지 않는다."""
+        return AssembledBlockDTO(
+            kind="data",
+            label="context_guidance",
+            text=(
+                "[회사 context 문서 지침] 이 업로드는 요구사항이 아니라 **회사 배경지식(조직·업무 "
+                "플로우 등)** 이다. 기능정의서로 쪼개지 말고, 회사를 이해하는 **단일 참고 문서 1장**"
+                "(요약① 수준)으로 작성하라. document_draft 하나만 내고 파생지식(derived)은 만들지 "
+                "마라. 경로/타입/회사 루트 링크는 시스템이 붙인다 — filename_candidate에 파일명 stem만 낸다."
+            ),
+        )
 
     @staticmethod
     def _summary_data_block(source: SourceDTO, destination_type: str) -> AssembledBlockDTO:

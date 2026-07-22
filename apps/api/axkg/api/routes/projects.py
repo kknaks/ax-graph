@@ -9,9 +9,11 @@
 회사 경계는 사람이 통제). admin 전용(main.py `_ADMIN_ROUTERS`로 require_admin 등록).
 스캐폴드는 origin/baseline/spec 3층 디렉토리만 만든다 — 폴더별 map.md 자동 재생성은 후속 WP.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from axkg.config import settings as app_settings
+from axkg.core.database import get_session
 from axkg.schemas.projects import (
     CreateProjectRequest,
     CreateProjectResponse,
@@ -20,6 +22,7 @@ from axkg.schemas.projects import (
     ProjectTreeResponse,
     SlugPreviewResponse,
 )
+from axkg.services.graph import GraphService
 from axkg.services.project_scaffold import (
     EmptyCorpNameError,
     InvalidOnConflictError,
@@ -55,9 +58,21 @@ def preview_slug(name: str) -> SlugPreviewResponse:
 
 
 @router.post("/projects", response_model=CreateProjectResponse, status_code=201)
-def create_project(body: CreateProjectRequest) -> CreateProjectResponse:
+async def create_project(
+    body: CreateProjectRequest,
+    session: AsyncSession = Depends(get_session),
+) -> CreateProjectResponse:
+    """회사 프로젝트 스캐폴드 + 회사 루트 앵커 `{corp}.md` 생성(WORK-013 P1).
+
+    회사 간략정보(도메인·한 줄 소개)로 `{corp}.md`를 만들고 **그래프 노드로 인덱싱**한다
+    (up-target 허브). 이후 baseline/spec/context가 `up:` 체인으로 이 루트에 수렴한다.
+    """
+    root = _root()
     try:
-        result = create_scaffold(_root(), body.name, on_conflict=body.on_conflict)
+        result = create_scaffold(
+            root, body.name, on_conflict=body.on_conflict,
+            domain=body.domain, intro=body.intro,
+        )
     except EmptyCorpNameError:
         raise _error(400, "EMPTY_CORP_NAME", "회사명을 입력해 주세요.")
     except SlugConflictError as exc:
@@ -68,6 +83,14 @@ def create_project(body: CreateProjectRequest) -> CreateProjectResponse:
         )
     except InvalidOnConflictError:
         raise _error(400, "INVALID_ON_CONFLICT", "처리 방식을 다시 선택해 주세요.")
+    # 새로 쓴 회사 루트 문서를 그래프에 인덱싱한다(up-target 허브). 이미 있으면 root_path=None.
+    root_path = result.get("root_path")
+    if root_path:
+        try:
+            await GraphService(session, root=root).rebuild_document(root_path)
+            await session.commit()
+        except Exception:  # noqa: BLE001 — 인덱싱 실패가 스캐폴드 생성을 되돌리지 않게 한다.
+            await session.rollback()
     return CreateProjectResponse(**result)
 
 

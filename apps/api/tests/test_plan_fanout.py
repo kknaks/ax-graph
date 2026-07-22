@@ -113,7 +113,14 @@ async def _setup_project_gate(
     session_factory: async_sessionmaker[AsyncSession], root: MarkdownRoot, corp: str = "the-sc"
 ):
     """project 분류 확정 상태의 문서화 게이트 + plan_project task를 만든다(scaffold 선행)."""
-    ps.create_scaffold(root, corp)
+    scaffold = ps.create_scaffold(root, corp)
+    async with session_factory() as session:
+        # 회사 루트 {corp}.md를 인덱싱(라우트 미러) — baseline up:[{corp}] 링크가 resolve되도록.
+        if scaffold.get("root_path"):
+            from axkg.services.graph import GraphService
+
+            await GraphService(session, root=root).rebuild_document(scaffold["root_path"])
+            await session.commit()
     async with session_factory() as session:
         repo = SourceRepository(session)
         src = await repo.create(

@@ -9,10 +9,14 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 
 # main 초안 document_type → 허용 디렉토리 (AXKG-SPEC-005, DEC-005).
+# company(회사 루트)·context(회사 배경지식)는 projects/{corp}/ 하위(구체 경로는
+# project_scaffold.company_root_path / project_context_path)로 검증한다(AXKG-DEC-009/WORK-013).
 MAIN_DIR_BY_TYPE = {
     "reference": "resources/",
     "permanent": "permanent/",
     "baseline": "projects/",
+    "company": "projects/",
+    "context": "projects/",
 }
 # 파생 create suggestion_type → 허용 디렉토리 (Derived Knowledge Apply Matrix, SPEC-004).
 # create_feature_spec(회사 프로젝트 팬아웃 기능정의서, WP11)는 projects/ 하위(구체 경로는

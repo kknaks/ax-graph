@@ -44,7 +44,12 @@ from axkg.services.plan_fanout_execution import (
     _latest_by_seq,
     compute_fanout_progress,
 )
-from axkg.services.project_scaffold import list_project_corps, resolve_corp
+from axkg.services.project_scaffold import (
+    SUBTYPE_CONTEXT,
+    list_project_corps,
+    resolve_corp,
+    resolve_project_subtype,
+)
 from axkg.services.summary_archive import write_summary_archive
 from axkg.storage.markdown_root import MarkdownRoot
 from axkg.workers.apply_executor import ApplyExecutor, ApplyValidationError
@@ -865,11 +870,13 @@ class GateService:
             payload=empty_documentation_payload(source, destination_type),
             form_schema_version=DOCUMENTATION_FORM_VERSION,
         )
-        task_type = (
-            PLAN_PROJECT_TASK
-            if destination_type == PROJECT_DESTINATION
-            else GENERATE_DOC_TASK
+        # project 요구사항 → plan-then-fanout(plan_project). project context(WORK-013) 및
+        # 비-project → 단일 generate_documentation_gate(context는 단일 문서, 팬아웃 없음).
+        is_requirement_fanout = (
+            destination_type == PROJECT_DESTINATION
+            and not self._is_context_project(destination_type, source)
         )
+        task_type = PLAN_PROJECT_TASK if is_requirement_fanout else GENERATE_DOC_TASK
         task = await self._enqueue_task(
             task_type,
             source_id=source.id,
@@ -991,7 +998,17 @@ class GateService:
         corp = resolve_corp(memo, corps)
         if corp:
             extra["corp"] = corp
+        # project 하위 sub-type(WORK-013 P2): 메모 성격 힌트로 requirement/context 판정.
+        # context → 단일 context 문서 경로, requirement → 기존 plan-then-fanout.
+        extra["project_subtype"] = resolve_project_subtype(memo)
         return extra
+
+    def _is_context_project(self, destination_type: str, source) -> bool:
+        """project + context sub-type인지(단일 문서 경로 라우팅용, WORK-013)."""
+        if destination_type != PROJECT_DESTINATION:
+            return False
+        memo = (source.metadata or {}).get(INTAKE_NOTE_KEY)
+        return resolve_project_subtype(memo) == SUBTYPE_CONTEXT
 
     # ------------------------------------------------------------------
     # plan-then-fanout — 진행률 + 기능 단위 재시도 (AXKG-DEC-008/WORK-012)
@@ -1106,12 +1123,15 @@ class GateService:
         """
         if gate_kind == GATE_KIND_DOCUMENTATION:
             destination_type = source.destination_type or "resource"
-            # project는 plan-then-fanout(AXKG-DEC-008): 재생성/재시도도 plan_project로 시작해
-            # 다시 fan-out·fan-in한다(단일 task 재생성 아님). resource/area는 종전 단일 task.
-            is_project = destination_type == PROJECT_DESTINATION
+            # project 요구사항은 plan-then-fanout(AXKG-DEC-008): 재생성/재시도도 plan_project로
+            # 시작해 다시 fan-out·fan-in한다. project context(WORK-013)·resource/area는 종전 단일
+            # generate/regenerate_documentation_gate.
+            is_fanout = destination_type == PROJECT_DESTINATION and not (
+                self._is_context_project(destination_type, source)
+            )
             return {
-                "generate": PLAN_PROJECT_TASK if is_project else GENERATE_DOC_TASK,
-                "regenerate": PLAN_PROJECT_TASK if is_project else REGENERATE_DOC_TASK,
+                "generate": PLAN_PROJECT_TASK if is_fanout else GENERATE_DOC_TASK,
+                "regenerate": PLAN_PROJECT_TASK if is_fanout else REGENERATE_DOC_TASK,
                 "form_schema_version": DOCUMENTATION_FORM_VERSION,
                 "empty_payload": empty_documentation_payload(source, destination_type),
                 "payload_kind": "documentation",
