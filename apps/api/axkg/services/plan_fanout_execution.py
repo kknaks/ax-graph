@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import uuid
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -55,6 +54,8 @@ from axkg.services.ai.plan_project import HANDLER_KIND as PLAN_HANDLER
 from axkg.services.document_paths import normalize_filename
 from axkg.services.documents import DocumentService
 from axkg.services.project_scaffold import corp_feature_specs
+from axkg.services.stem_conflict import disambiguate_stem as _disambiguate
+from axkg.services.stem_conflict import rewrite_wikilinks as _rewrite_main_links
 from axkg.services.qmd import build_qmd_client
 from axkg.storage.markdown_root import MarkdownRoot
 
@@ -236,26 +237,6 @@ def _read_existing_spec(root: MarkdownRoot, path: str) -> str:
         return ""
 
 
-def _disambiguate(orig: str, corp: str | None, taken: set[str]) -> str:
-    """충돌 없는 feature stem을 만든다 — `{corp}-` 프리픽스 우선, 이미 쓰였으면 `-2`… suffix.
-
-    corp 네임스페이스로 전역 concept/reference·타 corp와 원천 비충돌시키고, 그래도 겹치면
-    번호 suffix로 유일하게 만든다. `taken`은 인덱스 stem ∪ 이번 fanout 배정 stem.
-    """
-    base = orig if (corp and orig.startswith(f"{corp}-")) else (
-        f"{corp}-{orig}" if corp else orig
-    )
-    if base not in taken and base != orig:
-        return base
-    root_stem = base if base != orig else orig
-    if root_stem not in taken:
-        return root_stem
-    n = 2
-    while f"{root_stem}-{n}" in taken:
-        n += 1
-    return f"{root_stem}-{n}"
-
-
 def _resolve_feature_target(
     orig: str,
     corp: str | None,
@@ -292,23 +273,6 @@ def _resolve_feature_target(
     if orig in assigned:  # within-plan 중복(앞 기능이 이미 씀)
         return _FeatureAssignment(CREATE_FEATURE_SPEC, _disambiguate(orig, corp, taken))
     return _FeatureAssignment(CREATE_FEATURE_SPEC, orig)
-
-
-def _rewrite_main_links(markdown: str, stem_remap: dict) -> str:
-    """원본요약 본문의 `[[orig]]`/`[[orig|label]]`를 disambiguate된 `[[final]]`로 재작성한다."""
-    if not stem_remap:
-        return markdown
-
-    def _repl(match: re.Match) -> str:
-        inner = match.group(1)
-        target, sep, label = inner.partition("|")
-        tstem = target.split("#", 1)[0].strip()
-        if tstem in stem_remap:
-            new = stem_remap[tstem]
-            return f"[[{new}|{label}]]" if sep else f"[[{new}]]"
-        return match.group(0)
-
-    return re.sub(r"\[\[([^\[\]\n]+?)\]\]", _repl, markdown)
 
 
 async def _execute_feature_task(

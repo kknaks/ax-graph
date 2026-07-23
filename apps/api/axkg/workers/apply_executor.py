@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,12 +32,27 @@ from axkg.repositories.stale import StaleMarkRepository
 from axkg.services.document_paths import DERIVED_DIR_BY_TYPE as _DERIVED_DIR_BY_TYPE
 from axkg.services.document_paths import MAIN_DIR_BY_TYPE as _MAIN_DIR_BY_TYPE
 from axkg.services.documents import DocumentService, stem_from_path
-from axkg.services.project_scaffold import corp_from_path, origin_final_path
+from axkg.services.project_scaffold import (
+    corp_feature_specs,
+    corp_from_path,
+    origin_final_path,
+)
 from axkg.services.graph import GraphService
-from axkg.storage.markdown_parser import parse_markdown
+from axkg.services.stem_conflict import (
+    disambiguate_stem,
+    remap_stem_refs,
+    rewrite_wikilinks,
+)
+from axkg.storage.markdown_parser import parse_markdown, split_frontmatter
 from axkg.storage.markdown_root import DocumentExistsError, MarkdownRoot
 
 logger = logging.getLogger("axkg.apply_executor")
+
+# 회사 프로젝트 팬아웃 파생 기능정의서 suggestion_type (plan_fanout_execution과 동일 계약).
+_CREATE_FEATURE_SPEC = "create_feature_spec"
+_SUPPLEMENT_FEATURE = "supplement_existing_feature"
+# 기존 기능정의서 병합 보존 시 붙는 섹션 헤더 — 재해결 supplement가 기존 전문을 덧붙일 때 사용.
+_MERGE_SECTION_HEADER = "## 이전 정의(병합 보존)"
 
 # 경로 컨벤션 (PLAN-009-T-016): 허용 디렉토리 밖이면 PATH_NOT_ALLOWED 거부(안전망).
 # 디렉토리 매핑 SSOT는 services/document_paths.py — wrap(조립)과 여기(검증)가 공유한다
@@ -149,12 +165,19 @@ class ApplyExecutor:
         draft = form.get("document_draft") or {}
         derived = form.get("derived_suggestions") or []
         source_id = gate.source_id
-        target_path = draft.get("target_path")
 
         # 문서 lifecycle 판단 (SPEC-004 Document Lifecycle, T-012): 같은 source 계보의 현재
         # main 문서가 있으면 재문서화다 — 같은 경로면 덮어쓰기(버전++), 경로가 바뀌면 옛 문서
         # supersede + 새 문서 current.
         prior_main = await self._doc_repo.get_current_main_by_source(source_id)
+
+        # 충돌 재해결 pass (회사 프로젝트 팬아웃, TOCTOU 해소): spawn 시점에 정한 create/경로가
+        # 승인 지연 사이 라이브 DB 변화로 무효화됐을 수 있다. _validate 직전에 main/파생을
+        # 라이브 resolver 기준으로 재작성해 DUPLICATE_STEM/DocumentExistsError를 애초에 흡수한다
+        # (해소 가능한 팬아웃 충돌은 하드페일하지 않는다). 비프로젝트 apply는 no-op.
+        await self._reresolve_conflicts(draft, derived, source_id=source_id)
+        target_path = draft.get("target_path")
+
         same_path = prior_main is not None and prior_main.path == target_path
         path_changed = prior_main is not None and prior_main.path != target_path
         new_version = (prior_main.version + 1) if prior_main is not None else 1
@@ -282,6 +305,146 @@ class ApplyExecutor:
     # ------------------------------------------------------------------
     # 내부
     # ------------------------------------------------------------------
+
+    async def _reresolve_conflicts(
+        self,
+        draft: dict,
+        derived: list[dict],
+        *,
+        source_id: uuid.UUID,
+    ) -> None:
+        """apply 시점 라이브 DB로 stem 충돌을 재해결한다(회사 프로젝트 팬아웃만, in-place).
+
+        spawn 시점 dedup/disambiguate(plan_fanout_execution)와 **동일 규칙**을 라이브 인덱스에
+        다시 적용한다 — 승인 지연 사이 다른 소스가 같은 stem을 만들어 spawn 배정이 무효화되는
+        TOCTOU를 흡수한다. 규칙:
+
+        1) 파생 create `feature_spec` stem이 라이브 인덱스에 이미 존재:
+           - **같은 corp current feature_spec** → create→modify(supplement)로 전환(공통기능
+             합치기, 기존 경로에 병합 업그레이드).
+           - 그 외 타입/다른 corp(concept 등) → feature stem disambiguate 후 create 유지
+             (기존 문서 절대 불변, concept-supplement 가드 무침범).
+        2) main(baseline/context) stem이 **다른 소스**의 문서와 충돌 → distinctive stem으로
+           disambiguate(같은 소스 재문서화 `same_path`는 건드리지 않는다).
+        3) 링크 전파: main stem이 바뀌면 파생 spec의 up:/본문 링크를, 파생 stem이 바뀌면
+           원본요약 `## 기능 목록` 링크를 새 stem으로 재작성한다.
+
+        비프로젝트(corp 미바인딩) apply는 no-op — 종전 검증/에러 경로 그대로.
+        """
+        main_path = draft.get("target_path")
+        corp = corp_from_path(main_path)
+        if not corp:
+            return
+
+        resolver = await self._documents.build_resolver()
+        all_docs = await self._doc_repo.list_all()
+        corp_specs = corp_feature_specs(all_docs, corp)
+        taken = {d.stem for d in all_docs}
+
+        main_stem_remap: dict[str, str] = {}
+        feature_stem_remap: dict[str, str] = {}
+
+        # 1) main(baseline/context) stem 충돌 — 다른 소스 문서와 겹치면 distinctive stem으로 회피.
+        #    같은 소스 재문서화(같은 source_id로 이미 인덱싱된 문서)는 자기 자신이므로 건드리지 않는다.
+        main_stem = stem_from_path(main_path)
+        existing_main = resolver.resolve(main_stem)
+        own_main = existing_main is not None and existing_main.source_id == source_id
+        if existing_main is not None and not own_main:
+            new_main_stem = disambiguate_stem(main_stem, corp, taken)
+            taken.add(new_main_stem)
+            new_main_path = str(PurePosixPath(main_path).with_name(f"{new_main_stem}.md"))
+            draft["target_path"] = new_main_path
+            draft["filename_candidate"] = f"{new_main_stem}.md"
+            main_stem_remap[main_stem] = new_main_stem
+        else:
+            taken.add(main_stem)
+
+        # 2) 파생 create feature_spec stem 충돌.
+        for suggestion in derived:
+            if (
+                suggestion.get("change_kind") != "create"
+                or suggestion.get("suggestion_type") != _CREATE_FEATURE_SPEC
+            ):
+                continue
+            path = suggestion.get("target_path")
+            if not path:
+                continue
+            stem = stem_from_path(path)
+            existing = resolver.resolve(stem)
+            if existing is None:
+                taken.add(stem)
+                continue
+            same_corp_feature = corp_specs.get(stem)
+            if same_corp_feature is not None:
+                # 같은 corp current feature_spec → create를 supplement(modify)로 전환(합치기).
+                # 기존 전문을 로드해 병합 업그레이드하고, 대상 경로를 기존 경로로 맞춘다.
+                target = same_corp_feature["path"]
+                suggestion["suggestion_type"] = _SUPPLEMENT_FEATURE
+                suggestion["change_kind"] = "modify"
+                suggestion["file_action"] = "overwrite_markdown"
+                suggestion["target_path"] = target
+                suggestion["target_document_id"] = str(existing.id)
+                suggestion["draft_markdown"] = self._merge_feature_supplement(
+                    target, suggestion.get("draft_markdown")
+                )
+                suggestion.setdefault(
+                    "diff_preview", f"기존 기능정의서 '{stem}'에 새 요구 반영(apply 재해결 합치기)."
+                )
+                taken.add(stem)
+            else:
+                # concept/reference/permanent/company/context 또는 다른 corp/superseded feature와
+                # 충돌 → 그 문서는 절대 안 건드리고 feature stem을 disambiguate해 create 유지.
+                new_stem = disambiguate_stem(stem, corp, taken)
+                taken.add(new_stem)
+                new_path = str(PurePosixPath(path).with_name(f"{new_stem}.md"))
+                suggestion["target_path"] = new_path
+                suggestion["filename_candidate"] = f"{new_stem}.md"
+                feature_stem_remap[stem] = new_stem
+
+        # 3) 링크 전파.
+        if feature_stem_remap and draft.get("markdown_full"):
+            # 원본요약 `## 기능 목록`의 [[old]] → [[final]] (disambiguate된 파생 create 반영).
+            draft["markdown_full"] = rewrite_wikilinks(
+                draft["markdown_full"], feature_stem_remap
+            )
+        if main_stem_remap:
+            # 파생 spec의 up:[old-summary]·본문 [[old-summary]] → 새 원본요약 stem.
+            for suggestion in derived:
+                content = suggestion.get("draft_markdown")
+                if content:
+                    suggestion["draft_markdown"] = remap_stem_refs(content, main_stem_remap)
+
+    def _merge_feature_supplement(
+        self, existing_path: str, new_draft: str | None
+    ) -> str:
+        """기능 supplement 재해결 병합: 새 draft(현행 완전 spec)에 기존 전문 본문을 보존 덧붙인다.
+
+        TOCTOU 재해결에서 create로 생성됐던 draft는 기존 전문을 반영하지 못했으므로(생성 시점엔
+        기존 문서가 없었다), 정보 손실을 막기 위해 기존 문서 본문을 `## 이전 정의(병합 보존)`
+        섹션으로 append한다(이미 포함돼 있으면 그대로). 옛 버전 자체는 documents.version 이력에
+        박제되고, 여기서는 파일 본문에 이전 정의를 남겨 병합 성격을 유지한다. LLM 블렌드가 아닌
+        기계적 병합이다(executor는 LLM 미호출)."""
+        new_draft = new_draft or ""
+        try:
+            existing = (
+                self._root.read_text(existing_path)
+                if self._root.exists(existing_path)
+                else ""
+            )
+        except OSError:
+            existing = ""
+        if not existing.strip():
+            return new_draft
+        _, existing_body = split_frontmatter(existing)
+        existing_body = existing_body.strip()
+        if not existing_body or existing_body in new_draft:
+            return new_draft
+        return (
+            new_draft.rstrip()
+            + f"\n\n{_MERGE_SECTION_HEADER}\n\n"
+            + existing_body
+            + "\n"
+        )
 
     async def _stamp_derived_lifecycle(
         self,
