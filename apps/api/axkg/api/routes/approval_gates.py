@@ -14,8 +14,10 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from axkg.config import settings
 from axkg.core.database import get_session
 from axkg.integrations.open_kknaks import OpenKknaksClient
+from axkg.services.git_sync import sync_after_approval
 from axkg.schemas.gates import ApproveRequest, FeedbackRequest, GateResponse
 from axkg.services.classification_gate_execution import execute_classification_gate
 from axkg.services.documentation_gate_execution import execute_documentation_gate
@@ -146,6 +148,11 @@ async def approve_gate(
     if result.documentation_task is not None and _open_kknaks_client(request) is not None:
         await session.commit()
         _schedule_execution(request, background, result.documentation_task)
+    # 문서화 게이트 승인 = Apply Executor가 확정 문서를 디스크에 write → git 동기화(background,
+    # 비치명, sync on 시에만). AXKG-DEC-010/SPEC-015. 커밋으로 DB 확정 후 스케줄.
+    if result.gate.gate_kind == GATE_KIND_DOCUMENTATION and settings.axkg_docs_git_sync_enabled:
+        await session.commit()
+        background.add_task(sync_after_approval, f"approve: gate {result.gate.id}")
     return await _gate_response(service, result.gate)
 
 

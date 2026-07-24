@@ -22,5 +22,18 @@ class Settings(BaseSettings):
     # 1단 하이브리드 후보(시드) 개수(top_k). 2단 그래프 확장의 시드 집합.
     axkg_qmd_top_k: int = 12
 
+    # 문서 SoT git 동기화 (AXKG-DEC-010 / AXKG-SPEC-015). 승인 시 commit-then-rebase-push(전략 A) +
+    # 사람 교정 주기 pull+재인덱싱. 기본 off — 배포 검증 후 on. 로컬/테스트는 off라 git 미동작.
+    axkg_docs_git_sync_enabled: bool = False
+    # git repo 루트(.git 위치). 비우면 markdown_root의 부모로 추론(운영: /workspace/documents → /workspace).
+    axkg_docs_git_repo_root: str = ""
+    axkg_docs_git_token: str = ""
+    axkg_docs_git_remote: str = "https://github.com/kknaks/ax-graph.git"
+    axkg_docs_git_branch: str = "main"
+    axkg_docs_git_author_name: str = "axkg-bot"
+    axkg_docs_git_author_email: str = ""
+    # 사람 교정 pull+재인덱싱 루프 주기(초).
+    axkg_docs_git_pull_interval_seconds: int = 300
+
 
 settings = Settings()

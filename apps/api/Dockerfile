@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+# git — 문서 SoT 동기화(AXKG-DEC-010/SPEC-015)에서 commit/rebase/push 수행.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app

@@ -80,9 +80,22 @@ async def lifespan(app: FastAPI):
             logging.getLogger("axkg.main").warning(
                 "graph startup scan skipped (root/DB not ready)", exc_info=True
             )
+    # 문서 SoT git pull+재인덱싱 루프 (AXKG-DEC-010/SPEC-015 §6) — sync on 시에만.
+    # 사람 교정(로컬 clone push)을 주기적으로 pull 후 그래프 재빌드로 반영한다.
+    docs_pull_task = None
+    if app_settings.axkg_docs_git_sync_enabled:
+        import asyncio
+
+        from axkg.services.git_sync import pull_reindex_loop
+
+        docs_pull_task = asyncio.create_task(
+            pull_reindex_loop(app.state.session_factory)
+        )
     try:
         yield
     finally:
+        if docs_pull_task is not None:
+            docs_pull_task.cancel()
         if broker is not None:
             await broker.close()
         if app.state.slack_bot_client is not None:

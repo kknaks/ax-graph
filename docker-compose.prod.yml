@@ -59,7 +59,7 @@ services:
     image: ghcr.io/kknaks/ax-graph-qmd:${IMAGE_TAG:-latest}
     container_name: axkg-qmd
     volumes:
-      - /mnt/data/axkg/documents:/workspace:ro   # api와 같은 Markdown SoT(읽기 전용)
+      - /mnt/data/axkg/repo/documents:/workspace:ro   # api와 같은 Markdown SoT(읽기 전용, git 워킹트리 하위)
       - qmd-index:/root/.cache/qmd               # SQLite 인덱스 + 모델 캐시 영속
     restart: unless-stopped
 
@@ -78,10 +78,15 @@ services:
       # 2단 retriever 사이드카(비우면 keyword+edge 폴백만). rerank 기본 off(홈서버 GPU 없음).
       AXKG_QMD_MCP_URL: ${AXKG_QMD_MCP_URL:-http://qmd:8181/mcp}
       AXKG_QMD_RERANK_DEFAULT: ${AXKG_QMD_RERANK_DEFAULT:-false}
+      # 문서 SoT = git 워킹트리(repo 루트 마운트) 하위 documents/ (AXKG-DEC-010/SPEC-015).
+      # repo 루트를 /workspace 로 마운트해 컨테이너가 .git 을 볼 수 있게 하고, markdown root 는
+      # 그 하위 documents/ 로 override. git sync on/off·토큰·author 는 .env(ENV_PROD)에서 주입.
+      AXKG_MARKDOWN_ROOT: /workspace/documents
+      AXKG_DOCS_GIT_REPO_ROOT: /workspace
     volumes:
-      # Markdown SoT root (= AXKG_MARKDOWN_ROOT=/workspace). 지식 문서 전체의 원천 —
-      # 유실되면 복구 불가. 서버 HDD(/mnt/data 1.8T)에 bind 영속(사용자 확정 2026-07-10).
-      - /mnt/data/axkg/documents:/workspace
+      # git 워킹트리 repo 루트(.git 포함) bind — 하위 documents/ 가 지식 문서 SoT.
+      # 유실되면 복구 불가(github 백업 O). 서버 HDD(/mnt/data 1.8T)에 bind 영속.
+      - /mnt/data/axkg/repo:/workspace
     depends_on:
       postgres:
         condition: service_healthy
