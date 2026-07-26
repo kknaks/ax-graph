@@ -27,6 +27,7 @@ from axkg.models.base import utcnow
 from axkg.repositories.ai_tasks import AiTaskRepository
 from axkg.repositories.documents import DocumentRepository
 from axkg.repositories.gates import GateRepository
+from axkg.repositories.stale import StaleMarkRepository
 from axkg.repositories.sources import SourceRepository
 from axkg.services import project_scaffold as ps
 from axkg.services.gates import GateService
@@ -306,3 +307,54 @@ async def test_fanout_then_approve_applies_pantout(
         assert (await docs.get_by_stem("shared-calendar")).document_type == "feature_spec"
         src = await SourceRepository(session).get(sid)
         assert src.status == "documented"
+
+
+async def test_feature_spec_stale_regeneration_opens_supplement_task(
+    session_factory: async_sessionmaker[AsyncSession], markdown_root: Path
+) -> None:
+    """stale feature_spec 재생성(SPEC-004 §E-9, WORK-014) 진입점 배선.
+
+    적용된 feature_spec에 stale이 붙은 뒤 재생성을 열면, permanent처럼 문서화 게이트 재문서화가
+    아니라 프로젝트 게이트 v++ revision + 대상 spec 1장 `supplement_existing_feature` feature
+    task로 발주된다(plan_item 승계 + stale 주입). 대상 타입이 아니라고 리젝트되지 않는다.
+    """
+    root = MarkdownRoot(str(markdown_root))
+    sid, gate_id, rev_id, plan_task_id = await _setup_project_gate(session_factory, root)
+    await execute_plan_then_fanout(
+        plan_task_id, gate_id, rev_id, client=RoutingFakeClient(fail_stems=set()),
+        session_factory=session_factory, root=root,
+    )
+    async with session_factory() as session:
+        await GateService(session).approve(gate_id)
+        await session.commit()
+
+    # 신규 개념이 발굴한 것으로 보고 대상 spec에 stale 배지를 단다.
+    async with session_factory() as session:
+        spec = await DocumentRepository(session).get_by_stem("shared-calendar")
+        spec_id = spec.id
+        await StaleMarkRepository(session).mark(
+            document_id=spec_id,
+            concept_stem="음성-인식-stt",
+            concept_path="permanent/concepts/음성-인식-stt.md",
+            change_summary="관련 신규 개념 인입: [[음성-인식-stt]]",
+            triggering_revision_id=None,
+        )
+        await session.commit()
+
+    # 재생성 진입점 — feature_spec 분기.
+    async with session_factory() as session:
+        approved_rev_before = (
+            await GateRepository(session).get_gate(gate_id)
+        ).approved_revision_id
+        result = await GateService(session).open_stale_regeneration(spec_id)
+        await session.commit()
+        task = result.ai_task
+        # feature task로 발주됨(문서화 재생성 task 아님).
+        assert task.task_type == "generate_feature_spec"
+        assert task.payload["suggestion_type"] == "supplement_existing_feature"
+        assert task.payload["target_stem"] == "shared-calendar"
+        assert task.payload["plan_item"]["seq"] == 1  # plan_output에서 승계·매칭
+        assert "stale_regeneration" in task.payload  # E-3 3입력 주입
+        # v++ revision(승인본과 다른 새 revision).
+        assert result.revision.id != approved_rev_before
+        assert result.gate.status == "regenerating"

@@ -27,6 +27,10 @@ from axkg.schemas.documents import (
 )
 from axkg.schemas.gates import GateResponse
 from axkg.services.documentation_gate_execution import execute_documentation_gate
+from axkg.services.plan_fanout_execution import (
+    FEATURE_TASK_TYPE,
+    execute_feature_retry,
+)
 from axkg.services.documents import DocumentNotFoundError, DocumentService
 from axkg.services.gates import (
     GateService,
@@ -77,15 +81,24 @@ def _session_factory(request: Request):
 def _schedule_documentation_execution(
     request: Request, background: BackgroundTasks, result: GateTaskResult
 ) -> None:
-    """queued 재생성 task를 문서화 오케스트레이터에 연결한다(gates 라우트 미러링).
+    """queued 재생성 task를 알맞은 오케스트레이터에 연결한다(gates 라우트 미러링).
+
+    - feature_spec stale 재생성(§E-9): task_type=generate_feature_spec → 단일 기능 재실행 +
+      fan-in 재조립(execute_feature_retry, retry_feature와 동형).
+    - permanent stale 재생성: 문서화 오케스트레이터(execute_documentation_gate).
 
     client 미구성이면 큐만 남긴다. 호출측이 먼저 commit해야 background(별도 session)가 본다.
     """
     client = _open_kknaks_client(request)
     if client is None:
         return
+    executor = (
+        execute_feature_retry
+        if result.ai_task.task_type == FEATURE_TASK_TYPE
+        else execute_documentation_gate
+    )
     background.add_task(
-        execute_documentation_gate,
+        executor,
         result.ai_task.id,
         result.gate.id,
         result.revision.id,

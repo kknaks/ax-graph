@@ -37,6 +37,8 @@ SUGGESTION_TYPE_KEY = "suggestion_type"
 TARGET_STEM_KEY = "target_stem"
 EXISTING_SPEC_MARKDOWN_KEY = "existing_spec_markdown"
 SUPPLEMENT_FEATURE = "supplement_existing_feature"
+# stale 재생성 주입 payload 키 (SPEC-004 §E-9, WORK-014). gates가 실어 보내면 여기가 읽는다.
+STALE_REGENERATION_KEY = "stale_regeneration"
 
 _SOURCE_TEXT_CAP = 60_000
 _RETRIEVER_TOP_N = 8
@@ -83,6 +85,10 @@ class FeatureSpecContextBuilder(ContextBuilder):
             existing_md = task.payload.get(EXISTING_SPEC_MARKDOWN_KEY)
             if existing_md:
                 blocks.append(self._supplement_block(existing_md))
+        # stale 재생성(§E-9): 유발 신규 개념 전문 + `## 8. 연결` 보강 규율(WORK-014).
+        stale = task.payload.get(STALE_REGENERATION_KEY)
+        if stale:
+            blocks.append(self._stale_block(stale))
         return blocks
 
     def select_template_key(
@@ -132,6 +138,37 @@ class FeatureSpecContextBuilder(ContextBuilder):
                 "합류시켜라 — 기존 서술을 함부로 삭제·축소하지 마라. frontmatter의 filename은 기존 "
                 "stem을 그대로 유지하고, 더할 상세가 없으면 기존 전문을 실질적으로 유지한다.\n\n"
                 + existing_md
+            ),
+        )
+
+    @staticmethod
+    def _stale_block(stale: dict) -> AssembledBlockDTO:
+        """stale 재생성(§E-9) — 유발 신규 개념 전문 주입 + `## 8. 연결` 보강 규율(WORK-014).
+
+        기존 spec 전문은 supplement_block이 이미 주입한다(재생성은 그 전문 overwrite). 여기서는
+        새로 인입돼 재생성을 트리거한 관련 개념을 싣고, 그 개념이 이 기능의 차용 역량/기술 근거로
+        **진짜 관련되면** `## 8. 연결`에 `[[stem]]`으로 엮게 지시한다. 억지 링크 금지 — 무관하면
+        링크 없이 기존 연결을 보존하고, 지적되지 않은 본문 판단은 유지한다(E-6 대칭, 수정 최소).
+        """
+        concepts = [
+            {
+                "stem": c.get("stem"),
+                "change_summary": c.get("change_summary"),
+                "markdown": c.get("markdown"),
+            }
+            for c in (stale.get("changed_concepts") or [])
+        ]
+        return AssembledBlockDTO(
+            kind="data",
+            label="stale_new_concepts",
+            text=(
+                "[관련 신규 개념 인입 — `## 8. 연결` 보강] 아래 개념이 이 회사 지식그래프에 새로 "
+                "들어왔고 이 기능정의서와 의미적으로 관련될 수 있어 재생성이 트리거됐다. 각 개념이 "
+                "이 기능의 **차용 역량/기술 근거로 진짜 관련되면** `## 8. 연결`에 "
+                "`[[stem]] — 관계 이유` 한 줄로 엮어라(연결 후보 스냅샷 안 stem이어야 함). "
+                "**억지 링크 금지** — 무관하면 링크하지 말고 기존 연결을 그대로 보존한다. "
+                "지적되지 않은 본문 판단은 유지한다(수정 최소).\n"
+                + json.dumps(concepts, ensure_ascii=False, indent=2)
             ),
         )
 

@@ -16,6 +16,7 @@ background로 돈다. 범위 제외: Apply Executor(Phase 3 — 승인→파일 
 from __future__ import annotations
 
 import uuid
+from pathlib import PurePosixPath
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,11 +37,21 @@ from axkg.config import settings
 from axkg.services.ai.classification_gate import empty_classification_payload
 from axkg.services.ai.documentation_gate import empty_documentation_payload
 from axkg.services.ai.resolution import resolve_execution_config
-from axkg.services.ai.feature_spec import PLAN_ITEM_KEY
+from axkg.services.ai.feature_spec import (
+    EXISTING_SPEC_MARKDOWN_KEY,
+    PLAN_ITEM_KEY,
+    SOURCE_SUMMARY_STEM_KEY,
+    SUGGESTION_TYPE_KEY,
+    SUPPLEMENT_FEATURE,
+    TARGET_STEM_KEY,
+)
 from axkg.services.ai.plan_project import PLAN_OUTPUT_KEY
 from axkg.services.ai.source_summary import INTAKE_NOTE_KEY
+from axkg.services.document_paths import normalize_filename
 from axkg.services.plan_fanout_execution import (
+    CORP_KEY,
     FEATURE_TASK_TYPE,
+    _feature_stem,
     _latest_by_seq,
     compute_fanout_progress,
 )
@@ -73,6 +84,18 @@ FEEDBACK_MAX_LENGTH = 4000
 
 # stale 재생성 주입 전문 cap(문자). 문서당 소형 컨텍스트 유지(SPEC-004 §E-3) — 초과 시 truncated.
 _STALE_MARKDOWN_CAP = 8000
+
+
+def _find_plan_item_for_stem(plan_output: dict, stem: str) -> dict | None:
+    """plan_output.plan 항목 중 filename_candidate stem이 대상 spec stem과 같은 것을 찾는다.
+
+    feature_spec stale 재생성(§E-9)이 재발주할 plan_item을 승계받는 원천. 매칭 실패면 None
+    (재생성 불가 — plan_output과 spec stem 정합이 깨진 경우).
+    """
+    for item in plan_output.get("plan") or []:
+        if _feature_stem(item.get("filename_candidate")) == stem:
+            return dict(item)
+    return None
 
 # 승인 destination이 문서화 게이트로 이어지지 않는 종료 목적지(AXKG-SPEC-001 U-3).
 ARCHIVE_DESTINATION = "archive"
@@ -664,12 +687,15 @@ class GateService:
     async def open_stale_regeneration(
         self, document_id: uuid.UUID
     ) -> GateTaskResult:
-        """stale permanent의 재생성 게이트를 열고 재생성 task를 큐잉한다(SPEC-004 §E-3/E-4).
+        """stale 문서의 재생성 게이트를 열고 재생성 task를 큐잉한다(SPEC-004 §E-3/E-4/E-9).
 
-        그 permanent의 producing source 기준 문서화 게이트의 재문서화 경로(v++)를 재사용한다:
-        새 revision(v_next) + `regenerate_documentation_gate` task. task payload에 stale 주입
-        (대상 permanent 전문 + 바뀐 concept 전문 + 변경 요지, E-3 3입력)을 실어 context builder가
-        재생성 초안을 만들게 한다. 이후 리뷰/피드백/승인은 기존 게이트 계약 그대로다.
+        대상 타입으로 분기한다:
+        - permanent → producing source 문서화 게이트 재문서화 경로(v++) 재사용 + `regenerate_
+          documentation_gate` task. task payload에 stale 주입(대상 전문 + 바뀐 concept 전문 +
+          변경 요지, E-3 3입력)을 실어 context builder가 재생성 초안을 만든다.
+        - feature_spec → producing 문서화 게이트가 없으므로(plan-then-fanout 산출), 프로젝트
+          문서화 게이트에 v++ revision을 만들고 대상 spec 1장만 `supplement_existing_feature`로
+          재생성한다(_open_feature_spec_stale_regeneration, E-9).
 
         1 문서 = 1 재생성 게이트. 일괄 판단/일괄 실행 없음(E-3/E-4). 반영은 자동이 아니라
         사용자 승인(approve→Apply Executor)이 하며, 승인 apply가 stale을 해제한다.
@@ -677,10 +703,12 @@ class GateService:
         doc = await self._docs.get(document_id)
         if doc is None:
             raise StaleDocumentNotFoundError(document_id)
-        if doc.document_type != "permanent":
-            raise StaleRegenerationNotAllowedError(document_id, "not_permanent")
         if doc.source_id is None:
             raise StaleRegenerationNotAllowedError(document_id, "no_producing_source")
+        if doc.document_type == "feature_spec":
+            return await self._open_feature_spec_stale_regeneration(doc)
+        if doc.document_type != "permanent":
+            raise StaleRegenerationNotAllowedError(document_id, "unsupported_type")
 
         doc_gate = await self._gates.get_gate_by_source_and_kind(
             doc.source_id, GATE_KIND_DOCUMENTATION
@@ -725,6 +753,98 @@ class GateService:
         # 문서화 리뷰와 동일한 상태(summarized + visible)로 되돌린다 — 분류 게이트는 approved
         # 그대로라 inbox_label=classify_approved가 파생돼 승인 탭에 걸린다(새 상태/라벨 발명 없음).
         # v2 승인 시 기존 _approve_documentation→mark_documented가 다시 documented로 되돌린다.
+        await self._sources.set_status(doc.source_id, "summarized")
+        return GateTaskResult(doc_gate, revision, task)
+
+    async def _open_feature_spec_stale_regeneration(self, doc) -> GateTaskResult:
+        """feature_spec stale 재생성 (SPEC-004 §E-9, WORK-014).
+
+        feature_spec은 producing 문서화 게이트가 없다(plan-then-fanout 산출). 그 spec의 producing
+        프로젝트 문서화 게이트에 v++ revision을 만들고, plan_output(baseline+plan)을 승계한 뒤
+        **대상 spec 1장만** `supplement_existing_feature` feature task로 재발주한다. fan-in
+        (finalize_fanout)이 seq별 최신 task로 재조립하므로 나머지 spec·baseline은 이전 결과가
+        승계되고 대상만 재생성된다(retry_feature와 동형). stale 3입력(대상 spec 전문 + 바뀐
+        concept 전문 + 변경 요지)을 task payload에 실어 개념을 `## 8. 연결`에 엮게 한다(E-3 대칭).
+        """
+        doc_gate = await self._gates.get_gate_by_source_and_kind(
+            doc.source_id, GATE_KIND_DOCUMENTATION
+        )
+        if doc_gate is None:
+            raise StaleRegenerationNotAllowedError(doc.id, "no_documentation_gate")
+        parent_id = doc_gate.approved_revision_id or doc_gate.active_revision_id
+        parent_revision = (
+            await self._gates.get_revision(parent_id) if parent_id else None
+        )
+        plan_output = (
+            (parent_revision.payload or {}).get(PLAN_OUTPUT_KEY)
+            if parent_revision
+            else None
+        )
+        if not plan_output:
+            raise StaleRegenerationNotAllowedError(doc.id, "no_plan_output")
+        plan_item = _find_plan_item_for_stem(plan_output, doc.stem)
+        if plan_item is None:
+            raise StaleRegenerationNotAllowedError(doc.id, "plan_item_not_found")
+
+        main_draft = plan_output.get("document_draft") or {}
+        summary_stem = PurePosixPath(
+            normalize_filename(main_draft.get("filename_candidate"))
+        ).stem
+        corp = (parent_revision.payload or {}).get(CORP_KEY)
+        stale_injection = await self._build_stale_injection(doc)
+        existing_md = self._read_capped(
+            MarkdownRoot(settings.axkg_markdown_root), doc.path
+        )
+
+        # v++ revision: plan_output 승계 + stale 주입(fan-in 재조립·재시도가 재사용).
+        version = await self._gates.next_version(doc_gate.id)
+        revision = await self._gates.create_revision(
+            gate_id=doc_gate.id,
+            version=version,
+            status="drafting",
+            payload={
+                PLAN_OUTPUT_KEY: plan_output,
+                CORP_KEY: corp,
+                "stale_regeneration": stale_injection,
+            },
+            form_schema_version=DOCUMENTATION_FORM_VERSION,
+            parent_revision_id=parent_id,
+        )
+
+        definition = await self._definitions.get_by_key(FEATURE_TASK_TYPE)
+        if definition is None or not definition.enabled:
+            raise LookupError(f"ai_task_definition missing: {FEATURE_TASK_TYPE}")
+        global_settings = await self._settings.get_value(AI_PROVIDER_SETTINGS_KEY)
+        config = resolve_execution_config(global_settings, definition)
+        task = await self._tasks.create(
+            task_type=FEATURE_TASK_TYPE,
+            task_definition_id=definition.id,
+            provider=config.provider,
+            model=config.model,
+            options=config.options,
+            provider_options=config.provider_options,
+            source_id=doc.source_id,
+            gate_id=doc_gate.id,
+            revision_id=revision.id,
+            payload={
+                "kind": "feature_spec",
+                PLAN_ITEM_KEY: plan_item,
+                SOURCE_SUMMARY_STEM_KEY: summary_stem,
+                CORP_KEY: corp,
+                "destination_type": "project",
+                SUGGESTION_TYPE_KEY: SUPPLEMENT_FEATURE,
+                TARGET_STEM_KEY: doc.stem,
+                EXISTING_SPEC_MARKDOWN_KEY: existing_md,
+                "stale_regeneration": stale_injection,
+            },
+        )
+        revision = await self._gates.update_revision(revision.id, ai_task_id=task.id)
+        doc_gate = await self._gates.update_gate(
+            doc_gate.id,
+            status="regenerating",
+            active_revision_id=revision.id,
+            last_ai_task_id=task.id,
+        )
         await self._sources.set_status(doc.source_id, "summarized")
         return GateTaskResult(doc_gate, revision, task)
 

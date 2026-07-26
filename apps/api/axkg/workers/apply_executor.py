@@ -54,6 +54,16 @@ _SUPPLEMENT_FEATURE = "supplement_existing_feature"
 # 기존 기능정의서 병합 보존 시 붙는 섹션 헤더 — 재해결 supplement가 기존 전문을 덧붙일 때 사용.
 _MERGE_SECTION_HEADER = "## 이전 정의(병합 보존)"
 
+# stale 연쇄 대상 타입 (SPEC-004 §E-9, WORK-014): permanent 종합 노트 + 회사 기능정의서.
+_STALE_TARGET_TYPES = ("permanent", "feature_spec")
+# 신규 개념 발굴 마킹 파라미터 (SPEC-004 §E-8, WORK-014). 임계·N은 구현 상수(score 스케일은
+# retriever mode에 따라 다르므로 절대 임계는 보수적으로, 과잉은 top-N이 1차로 억제한다).
+_NEW_CONCEPT_RELATED_TOP_N = 8
+_NEW_CONCEPT_SCORE_MIN = 0.1
+_NEW_CONCEPT = "create_new_concept"
+# 발굴 쿼리에 실을 개념 본문 길이 상한(쿼리 과대 방지).
+_NEW_CONCEPT_QUERY_BODY_CAP = 2_000
+
 # 경로 컨벤션 (PLAN-009-T-016): 허용 디렉토리 밖이면 PATH_NOT_ALLOWED 거부(안전망).
 # 디렉토리 매핑 SSOT는 services/document_paths.py — wrap(조립)과 여기(검증)가 공유한다
 # (PLAN-009-T-040). main은 초안 document_type, 파생은 suggestion_type 기준. modify는 기존 경로.
@@ -246,10 +256,14 @@ class ApplyExecutor:
         #     인덱스에 남은 직전 version을 읽어 modify면 +1 한다. skip된 파생은 스탬프 안 함.
         await self._stamp_derived_lifecycle(derived, revision_id=revision.id, source_id=source_id)
 
-        # 3b) concept→permanent stale 연쇄 감지 (SPEC-004 §E, T-030): supplement(modify) 파생이
-        #     적용·버전 스탬프된 직후, 그 concept를 [[ ]]로 참조하는 permanent에 stale 배지를
-        #     붙인다(backlink 쿼리, AI 없음). 마킹만 — 어떤 자동 실행도 트리거하지 않는다.
+        # 3b) concept→{permanent, feature_spec} stale 연쇄 감지 (SPEC-004 §E).
+        #  ① backlink 축(E-2, T-030): supplement(modify) 파생이 적용·버전 스탬프된 직후, 그
+        #     concept를 [[ ]]로 참조하는 문서에 stale 배지를 붙인다(backlink 쿼리, AI 없음).
+        #  ② retriever 발굴 축(E-8, WORK-014): 신규 개념(create) 인입 시 backlink가 못 잡는
+        #     의미적 관련 문서를 retriever로 발굴해 배지를 붙인다.
+        #     두 축 모두 마킹만 — 어떤 자동 실행도 트리거하지 않는다.
         await self._mark_stale_from_supplements(derived, revision_id=revision.id)
+        await self._mark_stale_from_new_concepts(derived, revision_id=revision.id)
 
         # 3) main 문서 lifecycle 스탬프: current + version + producing revision/source 링크.
         #    경로가 바뀌었으면 옛 문서를 superseded로 내리고 옛 .md를 제거한다(박제는 DB가 보유).
@@ -267,6 +281,10 @@ class ApplyExecutor:
         # "재생성 승인 적용 시 해당 stale 해제"). concept 개정 재반영이 apply된 것으로 본다.
         if main_doc.document_type == "permanent":
             await self._stale.dismiss_document(main_doc.id)
+        # feature_spec stale 재생성(§E-9) apply는 대상 spec의 stale 배지를 해제한다(permanent
+        # main dismiss와 대칭). feature_spec은 derived supplement로 재생성되므로 main이 아니라
+        # revision의 stale_regeneration 대상 문서를 짚어 해제한다.
+        await self._dismiss_feature_spec_stale(revision)
 
         # 3c) 회사 프로젝트 팬아웃 origin 보관(WP11 Phase 4): main이 projects/{corp}/baseline/이면
         #     staging에 둔 첨부 docx 원본을 projects/{corp}/origin/으로 finalize한다(그래프 노드
@@ -481,11 +499,12 @@ class ApplyExecutor:
     async def _mark_stale_from_supplements(
         self, derived: list[dict], *, revision_id: uuid.UUID
     ) -> None:
-        """supplement(modify) 파생으로 개정된 concept를 참조하는 permanent에 stale 배지를 붙인다.
+        """supplement(modify) 파생으로 개정된 concept를 참조하는 문서에 stale 배지를 붙인다.
 
-        감지 = backlink 쿼리(document_edges)로 그 concept를 가리키는 문서 중 type=permanent만
-        (reference·비참조 문서 미마킹). 배지에는 변경 요지(유발 suggestion의 diff_preview)를
-        동봉한다(E-2). 내용 없이 skip된 supplement는 마킹하지 않는다(적용된 것만).
+        감지 = backlink 쿼리(document_edges)로 그 concept를 가리키는 문서 중 대상 타입
+        (permanent 종합 노트 + feature_spec 기능정의서, E-9)만 마킹한다(reference·비참조 문서
+        미마킹). 배지에는 변경 요지(유발 suggestion의 diff_preview)를 동봉한다(E-2). 내용 없이
+        skip된 supplement는 마킹하지 않는다(적용된 것만).
         """
         # supplement_existing_concept는 항상 modify(개념 성장 경로) — change_kind 누락 payload에도
         # 견고하도록 suggestion_type을 1차 기준으로 삼는다. 내용 없이 skip된 것은 제외(적용된 것만).
@@ -510,7 +529,7 @@ class ApplyExecutor:
                 referrer = docs_by_id.get(edge.from_document_id)
                 if (
                     referrer is None
-                    or referrer.document_type != "permanent"
+                    or referrer.document_type not in _STALE_TARGET_TYPES
                     or referrer.status != "current"
                     or referrer.id in marked
                 ):
@@ -523,6 +542,103 @@ class ApplyExecutor:
                     change_summary=change_summary,
                     triggering_revision_id=revision_id,
                 )
+
+    async def _mark_stale_from_new_concepts(
+        self, derived: list[dict], *, revision_id: uuid.UUID
+    ) -> None:
+        """신규 개념(create) 인입 시 retriever로 의미적 관련 문서를 발굴해 stale 배지를 붙인다.
+
+        backlink 축(_mark_stale_from_supplements)은 **이미 그 개념을 [[ ]]로 참조하는** 문서만
+        잡으므로, 신규 개념은 아직 아무도 링크하지 않아 감지되지 않는다(E-2 공백). 이 메서드는
+        신규 concept를 쿼리로 2단 Graph RAG retriever(qmd 하이브리드)를 돌려 **아직 링크하지
+        않았으나 의미적으로 관련된** 대상 타입 문서(permanent·feature_spec)에 배지를 붙인다
+        (E-8). 발굴 범위 = corp 경계(개념에 corp 맥락이 있으면 그 회사 문서만) + score 임계 +
+        top-N 상한. LLM 판정(triage)이 아니라 검색 발굴이며 배지 의미(E-1)·수동 재생성(E-3~6)은
+        상속한다. best-effort — retriever 장애가 apply를 깨지 않는다(발굴은 품질 보조).
+        """
+        creates = [
+            s
+            for s in derived
+            if s.get("suggestion_type") == _NEW_CONCEPT
+            and s.get("change_kind") != "modify"
+            and s.get("target_path")
+            and s.get("draft_markdown")
+        ]
+        if not creates:
+            return
+        for suggestion in creates:
+            concept = await self._doc_repo.get_by_path(suggestion["target_path"])
+            if concept is None or concept.document_type != "concept":
+                continue
+            query = self._new_concept_query(concept.title, suggestion["draft_markdown"])
+            await self.discover_related_and_mark(
+                concept, query, triggering_revision_id=revision_id
+            )
+
+    async def discover_related_and_mark(
+        self, concept, query: str, *, triggering_revision_id: uuid.UUID | None
+    ) -> int:
+        """개념 하나를 쿼리로 retriever 발굴 → 관련 대상 문서에 stale 배지(E-8 코어).
+
+        apply 시점 신규 개념 마킹과 backfill(기존 개념 소급)이 공유하는 발굴·마킹 로직이다.
+        발굴 범위 = score 임계 + top-N 상한 + (해당 시) corp 경계. 개념은 통상 corp-agnostic
+        (`permanent/concepts/`)라 corp 경계는 발동하지 않고 top-N/score가 blast radius를 좁힌다.
+        corp 경계는 트리거 문서가 corp-scoped(projects/{corp}/{origin|baseline|spec|context})일
+        때만 발동하는 방어 가드다. 마킹한 문서 수를 반환한다(멱등 — stale.mark upsert). retriever
+        장애 시 0 반환(비치명).
+        """
+        concept_corp = corp_from_path(concept.path)
+        try:
+            result = await self._graph.retrieve(query, top_n=_NEW_CONCEPT_RELATED_TOP_N)
+        except Exception:  # noqa: BLE001 — 발굴은 품질 보조, 실패해도 비치명.
+            logger.warning("new-concept stale 발굴 retriever 실패: %s", concept.stem)
+            return 0
+        change_summary = f"관련 신규 개념 인입: [[{concept.stem}]]"
+        marked: set[uuid.UUID] = set()
+        for doc in result.documents:
+            if (
+                doc.document_type not in _STALE_TARGET_TYPES
+                or doc.score < _NEW_CONCEPT_SCORE_MIN
+                or doc.document_id == concept.id
+                or doc.document_id in marked
+            ):
+                continue
+            # corp 경계: 개념에 corp 맥락이 있을 때만 발동(일반 개념은 무관하게 발굴).
+            if concept_corp is not None and corp_from_path(doc.path) != concept_corp:
+                continue
+            marked.add(doc.document_id)
+            await self._stale.mark(
+                document_id=doc.document_id,
+                concept_stem=concept.stem,
+                concept_path=concept.path,
+                change_summary=change_summary,
+                triggering_revision_id=triggering_revision_id,
+            )
+        return len(marked)
+
+    @staticmethod
+    def _new_concept_query(title: str, draft_markdown: str) -> str:
+        """발굴 쿼리 = 개념 제목 + 본문 앞부분(cap). 제목만으로는 의미 신호가 얕다."""
+        body = (draft_markdown or "")[:_NEW_CONCEPT_QUERY_BODY_CAP]
+        return f"{title}\n{body}".strip()
+
+    async def _dismiss_feature_spec_stale(
+        self, revision: ApprovalGateRevisionDTO
+    ) -> None:
+        """feature_spec stale 재생성(§E-9) 승인 apply 시 대상 spec의 stale 배지를 해제한다.
+
+        revision.payload의 stale_regeneration.target_document.path가 재생성 대상 spec이다. 일반
+        문서화 apply(재생성 아님)는 payload에 stale_regeneration이 없어 no-op이다.
+        """
+        stale_regen = (revision.payload or {}).get("stale_regeneration")
+        if not stale_regen:
+            return
+        target_path = (stale_regen.get("target_document") or {}).get("path")
+        if not target_path:
+            return
+        target_doc = await self._doc_repo.get_by_path(target_path)
+        if target_doc is not None:
+            await self._stale.dismiss_document(target_doc.id)
 
     async def _finalize_project_origin(
         self, source_id: uuid.UUID, main_path: str | None

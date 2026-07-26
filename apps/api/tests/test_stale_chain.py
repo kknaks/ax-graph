@@ -39,6 +39,7 @@ from axkg.services.gates import (
 from axkg.services.graph import GraphService
 from axkg.services.stale import StaleService
 from axkg.storage.markdown_root import MarkdownRoot
+from axkg.workers.apply_executor import ApplyExecutor
 
 VALID_SUMMARY = {
     "title": "Graph RAG 실전 설계",
@@ -74,6 +75,14 @@ def _permanent_md(title: str, body: str) -> str:
 
 def _reference_md(title: str, body: str) -> str:
     return f"---\ntype: reference\ntitle: {title}\n---\n\n# {title}\n\n{body}\n"
+
+
+def _feature_spec_md(stem: str, corp: str, body: str) -> str:
+    return (
+        f"---\ntype: feature_spec\ntitle: {stem}\ncorp: {corp}\n"
+        f"up: [{corp}-원본요약]\n---\n\n# {stem}\n\n{body}\n\n"
+        f"## 8. 연결\n- [[{corp}-원본요약]] — 이 기능이 나온 원본\n"
+    )
 
 
 class FakeClient(OpenKknaksClient):
@@ -257,6 +266,110 @@ async def test_supplement_marks_referring_permanent_only(
         assert mark.concept_stem == "concept"
         assert mark.change_summary == "개념 정의에 근거 문단 추가."
         assert mark.status == "active"
+
+
+# ---------------------------------------------------------------------------
+# 감지 (E-8/E-9, WORK-014): 신규 개념 create → retriever 발굴 → {permanent, feature_spec}
+# ---------------------------------------------------------------------------
+
+
+async def test_new_concept_discovers_related_permanent_and_feature_spec(
+    session_factory: async_sessionmaker[AsyncSession], markdown_root: Path
+) -> None:
+    """신규 개념(STT)이 아직 링크하지 않은 관련 feature_spec·permanent를 retriever로 발굴해
+
+    stale 배지를 붙인다(E-8). reference는 대상 타입이 아니라 미마킹(E-9). backlink가 못 잡는
+    사후 연결 공백을 메우는 축 — 회의록 spec ← STT 케이스.
+    """
+    root = MarkdownRoot(str(markdown_root))
+    # 관련 feature_spec(회의록) + permanent(음성 종합) — 아직 STT를 링크하지 않았다.
+    await _seed_document(
+        session_factory, markdown_root,
+        rel="projects/sc/spec/meeting-notes.md",
+        markdown=_feature_spec_md(
+            "meeting-notes", "sc",
+            "회의록을 음성으로 녹음해 자동 전사·검색한다. 음성 인식으로 받아쓴다.",
+        ),
+    )
+    await _seed_document(
+        session_factory, markdown_root,
+        rel="permanent/voice-strategy.md",
+        markdown=_permanent_md("음성 전략", "음성 인식 전사 파이프라인 종합 판단."),
+    )
+    # reference(비대상 타입) — 관련어를 담아도 마킹 대상이 아니다.
+    await _seed_document(
+        session_factory, markdown_root,
+        rel="resources/stt-ref.md",
+        markdown=_reference_md("STT 참고", "음성 인식 전사 자료 출처."),
+    )
+    # 신규 개념(STT).
+    await _seed_document(
+        session_factory, markdown_root,
+        rel="permanent/concepts/음성-인식-stt.md",
+        markdown=_concept_md("음성 인식 STT", "음성을 텍스트로 전사하는 음성 인식 기술."),
+    )
+
+    async with session_factory() as session:
+        concept = await DocumentRepository(session).get_by_stem("음성-인식-stt")
+        marked = await ApplyExecutor(session, root).discover_related_and_mark(
+            concept, "음성 인식 STT 전사 회의록", triggering_revision_id=None
+        )
+        await session.commit()
+    assert marked >= 2
+
+    async with session_factory() as session:
+        docs = DocumentRepository(session)
+        active = await StaleMarkRepository(session).list_active()
+        marked_docs = {m.document_id for m in active}
+        spec = await docs.get_by_stem("meeting-notes")
+        perm = await docs.get_by_stem("voice-strategy")
+        ref = await docs.get_by_stem("stt-ref")
+        assert spec.id in marked_docs  # feature_spec 발굴 (E-9 대상)
+        assert perm.id in marked_docs  # permanent 발굴 (E-9 대상)
+        assert ref.id not in marked_docs  # reference는 대상 타입 아님
+        mark = next(m for m in active if m.document_id == spec.id)
+        assert mark.concept_stem == "음성-인식-stt"
+        assert "음성-인식-stt" in (mark.change_summary or "")
+
+
+async def test_new_concept_is_corp_agnostic_reaches_specs_across_corps(
+    session_factory: async_sessionmaker[AsyncSession], markdown_root: Path
+) -> None:
+    """corp-agnostic 개념(permanent/concepts/)은 관련되면 여러 회사 spec에 닿는다.
+
+    개념은 통상 corp-agnostic이라 corp_from_path가 corp를 못 뽑아 corp 경계가 발동하지 않는다
+    — blast radius는 top-N/score가 좁힌다. STT 같은 일반 기술 개념이 특정 회사에 갇히지 않고
+    관련 회사 기능에 연결되는 올바른 동작(회의록 케이스의 근거).
+    """
+    root = MarkdownRoot(str(markdown_root))
+    await _seed_document(
+        session_factory, markdown_root,
+        rel="projects/sc/spec/sc-voice.md",
+        markdown=_feature_spec_md("sc-voice", "sc", "음성 인식 전사 기능."),
+    )
+    await _seed_document(
+        session_factory, markdown_root,
+        rel="projects/kb/spec/kb-voice.md",
+        markdown=_feature_spec_md("kb-voice", "kb", "음성 인식 전사 기능."),
+    )
+    await _seed_document(
+        session_factory, markdown_root,
+        rel="permanent/concepts/음성-인식-stt.md",
+        markdown=_concept_md("음성 인식 STT", "음성 인식 전사."),
+    )
+    async with session_factory() as session:
+        concept = await DocumentRepository(session).get_by_stem("음성-인식-stt")
+        await ApplyExecutor(session, root).discover_related_and_mark(
+            concept, "음성 인식 전사", triggering_revision_id=None
+        )
+        await session.commit()
+    async with session_factory() as session:
+        docs = DocumentRepository(session)
+        marked_docs = {
+            m.document_id for m in await StaleMarkRepository(session).list_active()
+        }
+        assert (await docs.get_by_stem("sc-voice")).id in marked_docs
+        assert (await docs.get_by_stem("kb-voice")).id in marked_docs
 
 
 # ---------------------------------------------------------------------------
