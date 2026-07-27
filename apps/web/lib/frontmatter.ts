@@ -1,6 +1,7 @@
 // 경량 frontmatter 파서 (PLAN-010-T-007) — 파일 보기 모달 메타 블록 렌더용.
 // markdown_full 선두의 YAML frontmatter(`---\n...\n---`)를 분리해 본문과 필드로 나눈다.
-// 이 용도(스칼라 · 블록 리스트 `- item` · inline flow `[a, b]` · 얕은 nested map)만 다루는
+// 이 용도(스칼라 · 블록 리스트 `- item`(들여쓰기 유무 무관) · inline flow `[a, b]` ·
+// 얕은 nested map)만 다루는
 // 최소 구현 — 신규 yaml 의존성은 도입하지 않는다. 파싱 불가/frontmatter 없음은 안전 fallback한다.
 
 export type FrontmatterValue =
@@ -82,12 +83,14 @@ export function parseFrontmatter(raw: string): ParsedMarkdown {
       for (; j < fmLines.length; j++) {
         const next = fmLines[j];
         if (next.trim() === "") continue;
-        if (!/^\s/.test(next)) break; // 들여쓰기 끝 → 다음 최상위 키
+        // 리스트 항목은 들여쓰기 여부와 무관하게 받는다 — YAML은 block sequence의
+        // 들여쓰기를 요구하지 않아 `tags:\n- a` 도 유효하다(생성기·외부 유입 문서에서 흔함).
         const listItem = next.match(/^\s*-\s+(.*)$/);
         if (listItem) {
           items.push(unquote(listItem[1]));
           continue;
         }
+        if (!/^\s/.test(next)) break; // 들여쓰기 없는 비-리스트 라인 → 다음 최상위 키
         const nested = next.trim().match(TOP_KEY);
         if (nested) {
           const nv = nested[2].trim();
