@@ -31,7 +31,7 @@ class GraphChatSession(Base):
     title: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     status: Mapped[str] = mapped_column(sa.Text(), nullable=False, default="active")
     selected_document_id: Mapped[uuid.UUID | None] = mapped_column(
-        sa.Uuid(), sa.ForeignKey("documents.id")
+        sa.Uuid(), sa.ForeignKey("documents.id", ondelete="SET NULL")
     )
     last_open_kknaks_session_id: Mapped[str | None] = mapped_column(sa.Text())
     metadata_: Mapped[dict[str, Any]] = mapped_column(
@@ -64,7 +64,7 @@ class GraphChatMessage(Base):
     # 순환 FK 회피(messages↔runs): FK 제약은 마이그레이션 step 13에서 runs 생성 후 추가.
     run_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid())
     selected_document_id: Mapped[uuid.UUID | None] = mapped_column(
-        sa.Uuid(), sa.ForeignKey("documents.id")
+        sa.Uuid(), sa.ForeignKey("documents.id", ondelete="SET NULL")
     )
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
@@ -93,7 +93,7 @@ class GraphChatRun(Base):
     status: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     open_kknaks_session_id: Mapped[str | None] = mapped_column(sa.Text())
     selected_document_id: Mapped[uuid.UUID | None] = mapped_column(
-        sa.Uuid(), sa.ForeignKey("documents.id")
+        sa.Uuid(), sa.ForeignKey("documents.id", ondelete="SET NULL")
     )
     filters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     retrieval_context: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)

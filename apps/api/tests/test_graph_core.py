@@ -215,12 +215,15 @@ async def test_remove_document_with_outgoing_edges_no_fk_violation(
     fk_document_edges_from_document_id 위반으로 재인덱싱이 크래시 → permanent→resources
     이동 뒤 DB가 옛 상태로 고착. 증분·full 재빌드 둘 다 안전해야 한다.
     """
+    # NOTE: 테스트 DB는 SQLite(FK 미강제)라 실제 FK 위반/CASCADE는 재현되지 않는다. 이 테스트는
+    # 삭제 코드 경로(엣지 선정리)가 도는지의 스모크 검증이고, 실제 Postgres FK on_delete 정정은
+    # migration 0025 + 모델 ondelete로 처리한다(prod 배포 후 재인덱싱 성공으로 검증).
     root = _write_fixture(tmp_path)
     async with session_factory() as session:
         await GraphService(session, root=root).rebuild_all()
         await session.commit()
 
-    # 파일 삭제(이동 시 옛 path와 동형) → 증분 rebuild가 FK 위반 없이 prune.
+    # 파일 삭제(이동 시 옛 path와 동형) → 증분 rebuild가 문서를 prune(엣지 선정리).
     (tmp_path / "references" / "retriever-note.md").unlink()
     async with session_factory() as session:
         stats = await GraphService(session, root=root).rebuild_document(

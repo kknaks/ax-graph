@@ -119,9 +119,10 @@ class DocumentStaleMark(Base):
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    # stale 대상(영향 가능성 있는 permanent 종합 노트).
+    # stale 대상(영향 가능성 있는 permanent 종합 노트). 문서 삭제 시 배지도 함께 제거(CASCADE)
+    # — 배지는 대상 문서가 없으면 무의미하고, 삭제 차단 시 재인덱싱이 FK 위반으로 크래시한다.
     document_id: Mapped[uuid.UUID] = mapped_column(
-        sa.Uuid(), sa.ForeignKey("documents.id"), nullable=False
+        sa.Uuid(), sa.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
     )
     # stale을 유발한 concept — stem(그래프 식별자)과 경로.
     concept_stem: Mapped[str] = mapped_column(sa.Text(), nullable=False)
