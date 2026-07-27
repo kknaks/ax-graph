@@ -1,19 +1,11 @@
 ---
 type: feature_spec
-title: 업무분장
-aliases:
-- 업무분장표
-- 업무 정리
-- 담당업무 분장
-tags:
-- 업무관리
-- 인사
-- 엑셀출력
-up:
-- sc-통합업무관리시스템-원본요약
-- sc-원본요약-2
-feature_id: sc-F-16
-corp: sc
+title: "업무분장"
+aliases: ["업무분장표", "업무 정리", "담당업무 분장"]
+tags: ["업무관리", "인사", "엑셀출력"]
+up: ["sc-통합업무관리시스템-원본요약", "sc-원본요약-2"]
+feature_id: "sc-F-16"
+corp: "sc"
 status: draft
 priority: mid
 ---

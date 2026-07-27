@@ -1,18 +1,11 @@
 ---
 type: feature_spec
-title: CS 응대 자동화
-aliases:
-- CS 자동응대
-- 야간 CS 응대
-- 문의 데이터 정리
-tags:
-- cs
-- 자동화
-- 고객문의
-up:
-- sc-원본요약-3
-feature_id: sc-F-04
-corp: sc
+title: "CS 응대 자동화"
+aliases: ["CS 자동응대", "야간 CS 응대", "문의 데이터 정리"]
+tags: ["cs", "자동화", "고객문의"]
+up: ["sc-원본요약-3"]
+feature_id: "sc-F-04"
+corp: "sc"
 status: draft
 priority: mid
 ---

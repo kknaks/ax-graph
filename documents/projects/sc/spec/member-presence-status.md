@@ -1,18 +1,11 @@
 ---
 type: feature_spec
-title: 자리 비움 확인
-aliases:
-- 자리 비움 상태
-- 구성원 현재 상태 확인
-- 부재 확인
-tags:
-- 근태
-- 협업
-- 실시간상태
-up:
-- sc-원본요약-2
-feature_id: sc-F-02
-corp: sc
+title: "자리 비움 확인"
+aliases: ["자리 비움 상태", "구성원 현재 상태 확인", "부재 확인"]
+tags: ["근태", "협업", "실시간상태"]
+up: ["sc-원본요약-2"]
+feature_id: "sc-F-02"
+corp: "sc"
 status: draft
 priority: mid
 ---

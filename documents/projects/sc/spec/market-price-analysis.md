@@ -1,18 +1,11 @@
 ---
 type: feature_spec
-title: 시장 가격 분석
-aliases:
-- 시장 가격 분석
-- 지역별 병원별 가격 분석
-- 이벤트·가격 시장 데이터 수집
-tags:
-- data-analysis
-- market
-- pricing
-up:
-- sc-원본요약-3
-feature_id: sc-F-03
-corp: sc
+title: "시장 가격 분석"
+aliases: ["시장 가격 분석", "지역별 병원별 가격 분석", "이벤트·가격 시장 데이터 수집"]
+tags: ["data-analysis", "market", "pricing"]
+up: ["sc-원본요약-3"]
+feature_id: "sc-F-03"
+corp: "sc"
 status: draft
 priority: mid
 ---

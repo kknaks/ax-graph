@@ -1,17 +1,11 @@
 ---
 type: feature_spec
-title: 연관 업무 연결
-aliases:
-- 연관 업무 연결
-- 관련 작업 연결
-- 이전 작업 연결
-tags:
-- 업무연결
-- 협업
-up:
-- sc-원본요약-2
-feature_id: sc-F-03
-corp: sc
+title: "연관 업무 연결"
+aliases: ["연관 업무 연결", "관련 작업 연결", "이전 작업 연결"]
+tags: ["업무연결", "협업"]
+up: ["sc-원본요약-2"]
+feature_id: "sc-F-03"
+corp: "sc"
 status: draft
 priority: mid
 ---

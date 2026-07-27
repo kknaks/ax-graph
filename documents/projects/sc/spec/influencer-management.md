@@ -1,18 +1,11 @@
 ---
 type: feature_spec
-title: 인플루언서 관리
-aliases:
-- 인플루언서 리스트업
-- 체험단 관리
-- 인플루언서 지표 수집
-tags:
-- 인플루언서
-- 체험단
-- 마케팅
-up:
-- sc-원본요약-3
-feature_id: sc-F-05
-corp: sc
+title: "인플루언서 관리"
+aliases: ["인플루언서 리스트업", "체험단 관리", "인플루언서 지표 수집"]
+tags: ["인플루언서", "체험단", "마케팅"]
+up: ["sc-원본요약-3"]
+feature_id: "sc-F-05"
+corp: "sc"
 status: draft
 priority: mid
 ---

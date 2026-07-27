@@ -1,21 +1,11 @@
 ---
 type: feature_spec
-title: 회의록 업무지시
-aliases:
-- 회의록 업무 생성
-- 회의 결정사항 업무화
-- 회의록 기록
-- 회의 자동 녹음·요약
-tags:
-- 회의록
-- 업무지시
-- 통합업무관리
-- 자동녹음
-up:
-- sc-통합업무관리시스템-원본요약
-- sc-원본요약-2
-feature_id: sc-F-05
-corp: sc
+title: "회의록 업무지시"
+aliases: ["회의록 업무 생성", "회의 결정사항 업무화", "회의록 기록", "회의 자동 녹음·요약"]
+tags: ["회의록", "업무지시", "통합업무관리", "자동녹음"]
+up: ["sc-통합업무관리시스템-원본요약", "sc-원본요약-2"]
+feature_id: "sc-F-05"
+corp: "sc"
 status: draft
 priority: high
 ---

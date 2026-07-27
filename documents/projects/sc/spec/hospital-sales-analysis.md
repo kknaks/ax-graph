@@ -1,18 +1,11 @@
 ---
 type: feature_spec
-title: 병원 매출 분석
-aliases:
-- 병원 매출 동향 자동 분석
-- 매출 대시보드
-- 시장 가격 분석
-tags:
-- 매출분석
-- 대시보드
-- 시장가격
-up:
-- sc-원본요약-3
-feature_id: sc-F-01
-corp: sc
+title: "병원 매출 분석"
+aliases: ["병원 매출 동향 자동 분석", "매출 대시보드", "시장 가격 분석"]
+tags: ["매출분석", "대시보드", "시장가격"]
+up: ["sc-원본요약-3"]
+feature_id: "sc-F-01"
+corp: "sc"
 status: draft
 priority: high
 ---

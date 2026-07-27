@@ -1,18 +1,11 @@
 ---
 type: feature_spec
-title: 콘텐츠 제작 자동화
-aliases:
-- SNS 콘텐츠 자동 제작
-- 홍보 이미지·영상 생성
-- 마케팅 비주얼 자동화
-tags:
-- 콘텐츠
-- 마케팅
-- 생성AI
-up:
-- sc-원본요약-3
-feature_id: sc-F-01
-corp: sc
+title: "콘텐츠 제작 자동화"
+aliases: ["SNS 콘텐츠 자동 제작", "홍보 이미지·영상 생성", "마케팅 비주얼 자동화"]
+tags: ["콘텐츠", "마케팅", "생성AI"]
+up: ["sc-원본요약-3"]
+feature_id: "sc-F-01"
+corp: "sc"
 status: draft
 priority: high
 ---

@@ -1,19 +1,11 @@
 ---
 type: feature_spec
-title: 알림센터
-aliases:
-- 알림센터
-- 알림 센터
-- 통합 알림
-- Notification Center
-tags:
-- 알림
-- 통합업무관리
-up:
-- sc-통합업무관리시스템-원본요약
-- sc-원본요약-2
-feature_id: sc-F-22
-corp: sc
+title: "알림센터"
+aliases: ["알림센터", "알림 센터", "통합 알림", "Notification Center"]
+tags: ["알림", "통합업무관리"]
+up: ["sc-통합업무관리시스템-원본요약", "sc-원본요약-2"]
+feature_id: "sc-F-22"
+corp: "sc"
 status: draft
 priority: mid
 ---
