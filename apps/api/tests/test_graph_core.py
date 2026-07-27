@@ -205,6 +205,39 @@ async def test_external_edit_incremental_rebuild(
         assert edges["ghost-doc"].to_document_id == ghost.id
 
 
+async def test_remove_document_with_outgoing_edges_no_fk_violation(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """outgoing 엣지가 있는 문서의 파일을 지워도 FK 위반 없이 prune된다(회귀).
+
+    retriever-note는 `[[graph-rag]]` outgoing + inbox-note로부터의 incoming 엣지를 갖는다.
+    옛 버그: 삭제 시 outgoing 엣지(from_document_id)를 먼저 안 지워
+    fk_document_edges_from_document_id 위반으로 재인덱싱이 크래시 → permanent→resources
+    이동 뒤 DB가 옛 상태로 고착. 증분·full 재빌드 둘 다 안전해야 한다.
+    """
+    root = _write_fixture(tmp_path)
+    async with session_factory() as session:
+        await GraphService(session, root=root).rebuild_all()
+        await session.commit()
+
+    # 파일 삭제(이동 시 옛 path와 동형) → 증분 rebuild가 FK 위반 없이 prune.
+    (tmp_path / "references" / "retriever-note.md").unlink()
+    async with session_factory() as session:
+        stats = await GraphService(session, root=root).rebuild_document(
+            "references/retriever-note.md"
+        )
+        await session.commit()
+        assert stats.removed == 1
+    async with session_factory() as session:
+        assert await DocumentRepository(session).get_by_stem("retriever-note") is None
+
+    # full 스캔도 사라진 문서를 FK 위반 없이 prune해야 한다(delete_all_edges 선행).
+    async with session_factory() as session:
+        stats = await GraphService(session, root=root).rebuild_all()
+        await session.commit()
+        assert stats.indexed >= 1
+
+
 async def test_incremental_rebuild_updates_edges_on_body_change(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:

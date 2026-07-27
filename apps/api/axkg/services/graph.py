@@ -278,7 +278,11 @@ class GraphService:
             parsed_by_path[rel] = parsed
             stats.indexed += 1
 
-        # 2) 디스크에서 사라진 문서 제거.
+        # 2) 엣지를 먼저 전부 지운다 — 사라진 문서를 지우기 전에 그 문서를 참조하는
+        #    document_edges(from/to)를 비워야 fk_document_edges_from_document_id 위반을 피한다.
+        await self._docs.delete_all_edges()
+
+        # 3) 디스크에서 사라진 문서 제거(이제 참조 엣지가 없어 안전).
         on_disk = set(rels)
         for doc in await self._docs.list_all():
             if doc.path not in on_disk:
@@ -286,8 +290,7 @@ class GraphService:
                 if removed_id is not None:
                     stats.removed += 1
 
-        # 3) 엣지 전체 재구성.
-        await self._docs.delete_all_edges()
+        # 4) 엣지 전체 재구성.
         resolver = await self._documents.build_resolver()
         for rel, parsed in parsed_by_path.items():
             doc = await self._docs.get_by_path(rel)
@@ -313,9 +316,15 @@ class GraphService:
             raise RuntimeError("markdown root not configured")
         stats = RebuildStats()
         if not self._root.exists(path):
-            removed_id = await self._docs.delete_by_path(path)
-            if removed_id is not None:
-                await self._docs.break_edges_to_document(removed_id)
+            # 삭제 전에 이 문서의 outgoing 엣지(from_document_id)를 먼저 제거해야
+            # fk_document_edges_from_document_id 위반을 피한다(예: [[개념]] 링크가 많은
+            # 문서를 permanent→resources로 옮긴 뒤 옛 path prune 시). 그 다음 inbound 엣지를
+            # broken 처리하고 문서를 제거한다.
+            doc = await self._docs.get_by_path(path)
+            if doc is not None:
+                await self._docs.delete_edges_from(doc.id)
+                await self._docs.break_edges_to_document(doc.id)
+                await self._docs.delete_by_path(path)
                 stats.removed += 1
             return stats
 
