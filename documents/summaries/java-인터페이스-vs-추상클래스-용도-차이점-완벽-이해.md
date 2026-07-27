@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Java 인터페이스 vs 추상클래스 용도 차이점 완벽 이해
-source_url: https://inpa.tistory.com/entry/JAVA-%E2%98%95-%EC%9D%B8%ED%84%B0%ED%8E%98%EC%9D%B4%EC%8A%A4-vs-%EC%B6%94%EC%83%81%ED%81%B4%EB%9E%98%EC%8A%A4-%EC%B0%A8%EC%9D%B4%EC%A0%90-%EC%99%84%EB%B2%BD-%EC%9D%B4%ED%95%B4%ED%95%98%EA%B8%B0
-tags:
-- 인터페이스
-- 추상클래스
-- Java
-- OOP
-- 다형성
-- 다중상속
-- 마커인터페이스
-- 디자인패턴
-- 추상화
-- 상속
-summarized_at: '2026-07-21T01:25:24.119455+00:00'
+title: "Java 인터페이스 vs 추상클래스 용도 차이점 완벽 이해"
+source_url: "https://inpa.tistory.com/entry/JAVA-%E2%98%95-%EC%9D%B8%ED%84%B0%ED%8E%98%EC%9D%B4%EC%8A%A4-vs-%EC%B6%94%EC%83%81%ED%81%B4%EB%9E%98%EC%8A%A4-%EC%B0%A8%EC%9D%B4%EC%A0%90-%EC%99%84%EB%B2%BD-%EC%9D%B4%ED%95%B4%ED%95%98%EA%B8%B0"
+tags: ["인터페이스", "추상클래스", "Java", "OOP", "다형성", "다중상속", "마커인터페이스", "디자인패턴", "추상화", "상속"]
+summarized_at: "2026-07-21T01:25:24.119455+00:00"
 ---
 
 ## 인터페이스 vs 추상클래스 비교표

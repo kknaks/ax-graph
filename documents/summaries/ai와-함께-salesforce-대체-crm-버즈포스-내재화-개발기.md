@@ -1,19 +1,9 @@
 ---
 type: summary
-title: AI와 함께 Salesforce 대체 CRM '버즈포스' 내재화 개발기
-source_url: https://tech.buzzvil.com/blog/ai-buzzforce-salesforce-crm
-tags:
-- CRM 내재화
-- Salesforce 대체
-- AI Agent 개발
-- 버즈포스
-- ERD 설계
-- 데이터 마이그레이션
-- 피드백 루프
-- STICC Framework
-- 유스케이스 중심 설계
-- AX 전환
-summarized_at: '2026-07-13T05:05:48.742870+00:00'
+title: "AI와 함께 Salesforce 대체 CRM '버즈포스' 내재화 개발기"
+source_url: "https://tech.buzzvil.com/blog/ai-buzzforce-salesforce-crm"
+tags: ["CRM 내재화", "Salesforce 대체", "AI Agent 개발", "버즈포스", "ERD 설계", "데이터 마이그레이션", "피드백 루프", "STICC Framework", "유스케이스 중심 설계", "AX 전환"]
+summarized_at: "2026-07-13T05:05:48.742870+00:00"
 ---
 
 ## 0. CRM을 새로 만든다는 것

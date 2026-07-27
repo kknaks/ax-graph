@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 메모앱 뿐만 아니라 인생까지 체계화되는 PARA 노트 정리법
-source_url: https://www.youtube.com/watch?v=L-D_xlAdzXI
-tags:
-- PARA
-- 노트정리법
-- 세컨드브레인
-- 티아고포르테
-- 노션템플릿
-- 생산성
-- 지식관리
-- 프로젝트관리
-- 실행도
-- 아카이브
-summarized_at: '2026-07-13T01:15:06.396326+00:00'
+title: "메모앱 뿐만 아니라 인생까지 체계화되는 PARA 노트 정리법"
+source_url: "https://www.youtube.com/watch?v=L-D_xlAdzXI"
+tags: ["PARA", "노트정리법", "세컨드브레인", "티아고포르테", "노션템플릿", "생산성", "지식관리", "프로젝트관리", "실행도", "아카이브"]
+summarized_at: "2026-07-13T01:15:06.396326+00:00"
 ---
 
 ## 기존 노트 정리법의 문제

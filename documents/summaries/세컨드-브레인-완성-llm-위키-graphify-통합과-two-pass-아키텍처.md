@@ -1,19 +1,9 @@
 ---
 type: summary
-title: '세컨드 브레인 완성: LLM 위키 × Graphify 통합과 Two-Pass 아키텍처'
-source_url: https://www.youtube.com/watch?v=IIvMDB6Oxok
-tags:
-- LLM 위키
-- Graphify
-- 세컨드 브레인
-- 지식 복리
-- Two-Pass 아키텍처
-- 시맨틱 연결
-- 고립 노드
-- 토큰 비용 절감
-- 지식 그래프
-- 자동화 파이프라인
-summarized_at: '2026-07-13T04:13:46.341257+00:00'
+title: "세컨드 브레인 완성: LLM 위키 × Graphify 통합과 Two-Pass 아키텍처"
+source_url: "https://www.youtube.com/watch?v=IIvMDB6Oxok"
+tags: ["LLM 위키", "Graphify", "세컨드 브레인", "지식 복리", "Two-Pass 아키텍처", "시맨틱 연결", "고립 노드", "토큰 비용 절감", "지식 그래프", "자동화 파이프라인"]
+summarized_at: "2026-07-13T04:13:46.341257+00:00"
 ---
 
 ## AI 지식 위키의 실제 문제

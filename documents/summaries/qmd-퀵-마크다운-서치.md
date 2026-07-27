@@ -1,19 +1,9 @@
 ---
 type: summary
-title: QMD - 퀵 마크다운 서치
-source_url: https://news.hada.io/topic?id=26213
-tags:
-- 마크다운 검색
-- CLI
-- BM25
-- 벡터 검색
-- 하이브리드 검색
-- LLM 재순위화
-- MCP
-- 로컬 AI
-- SQLite
-- Obsidian
-summarized_at: '2026-07-13T01:13:12.144356+00:00'
+title: "QMD - 퀵 마크다운 서치"
+source_url: "https://news.hada.io/topic?id=26213"
+tags: ["마크다운 검색", "CLI", "BM25", "벡터 검색", "하이브리드 검색", "LLM 재순위화", "MCP", "로컬 AI", "SQLite", "Obsidian"]
+summarized_at: "2026-07-13T01:13:12.144356+00:00"
 ---
 
 ## 개요

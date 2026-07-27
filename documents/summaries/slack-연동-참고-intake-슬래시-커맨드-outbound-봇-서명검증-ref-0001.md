@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Slack 연동 참고 — intake 슬래시 커맨드·outbound 봇·서명검증 (REF-0001)
+title: "Slack 연동 참고 — intake 슬래시 커맨드·outbound 봇·서명검증 (REF-0001)"
 source_url: null
-tags:
-- Slack
-- 슬래시 커맨드
-- 서명검증
-- HMAC-SHA256
-- 멱등성
-- chat.postMessage
-- ephemeral
-- BackgroundTasks
-- inbound
-- outbound
-summarized_at: '2026-07-21T00:56:08.601821+00:00'
+tags: ["Slack", "슬래시 커맨드", "서명검증", "HMAC-SHA256", "멱등성", "chat.postMessage", "ephemeral", "BackgroundTasks", "inbound", "outbound"]
+summarized_at: "2026-07-21T00:56:08.601821+00:00"
 ---
 
 ## 개요

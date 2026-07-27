@@ -1,19 +1,9 @@
 ---
 type: summary
-title: VoltAgent Workflow Suspend & Resume & Cancellation
-source_url: https://voltagent.dev/docs/workflows/suspend-resume/
-tags:
-- VoltAgent
-- workflow
-- suspend
-- resume
-- cancellation
-- createWorkflowChain
-- resumeSchema
-- time travel
-- crash recovery
-- REST API
-summarized_at: '2026-07-10T11:58:08.968692+00:00'
+title: "VoltAgent Workflow Suspend & Resume & Cancellation"
+source_url: "https://voltagent.dev/docs/workflows/suspend-resume/"
+tags: ["VoltAgent", "workflow", "suspend", "resume", "cancellation", "createWorkflowChain", "resumeSchema", "time travel", "crash recovery", "REST API"]
+summarized_at: "2026-07-10T11:58:08.968692+00:00"
 ---
 
 ## 개요

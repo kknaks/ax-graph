@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Shopify 창업자 Tobi Lütke가 만든 로컬 하이브리드 검색 엔진 QMD
-source_url: https://wikidocs.net/blog/@jaehong/13046/
-tags:
-- QMD
-- 로컬 검색 엔진
-- 하이브리드 검색
-- BM25
-- 벡터 임베딩
-- LLM 재순위
-- MCP
-- Tobi Lütke
-- GGUF
-- 개인 지식 관리
-summarized_at: '2026-07-13T01:14:05.794250+00:00'
+title: "Shopify 창업자 Tobi Lütke가 만든 로컬 하이브리드 검색 엔진 QMD"
+source_url: "https://wikidocs.net/blog/@jaehong/13046/"
+tags: ["QMD", "로컬 검색 엔진", "하이브리드 검색", "BM25", "벡터 임베딩", "LLM 재순위", "MCP", "Tobi Lütke", "GGUF", "개인 지식 관리"]
+summarized_at: "2026-07-13T01:14:05.794250+00:00"
 ---
 
 ## 문제 정의

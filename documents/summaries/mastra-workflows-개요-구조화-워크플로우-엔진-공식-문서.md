@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Mastra Workflows 개요 — 구조화 워크플로우 엔진 공식 문서
-source_url: https://mastra.ai/docs/workflows/overview
-tags:
-- Mastra
-- workflow
-- createStep
-- createWorkflow
-- step
-- suspend
-- resume
-- streaming
-- workflow state
-- RequestContext
-summarized_at: '2026-07-10T11:59:58.172696+00:00'
+title: "Mastra Workflows 개요 — 구조화 워크플로우 엔진 공식 문서"
+source_url: "https://mastra.ai/docs/workflows/overview"
+tags: ["Mastra", "workflow", "createStep", "createWorkflow", "step", "suspend", "resume", "streaming", "workflow state", "RequestContext"]
+summarized_at: "2026-07-10T11:59:58.172696+00:00"
 ---
 
 ## 워크플로우란

@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 'OpenWiki: AI 에이전트를 위한 자동 위키 구축 TypeScript CLI 도구'
-source_url: https://m.youtube.com/watch?v=-fuM7l81v-k&pp=ugUEEgJrbw%3D%3D&ra=m
-tags:
-- OpenWiki
-- 에이전트 위키
-- 문서 자동화
-- TypeScript CLI
-- LLM
-- 커넥터
-- 개인 지식 관리
-- CI/CD
-- 코드베이스 문서화
-- SHA 캐시
-summarized_at: '2026-07-20T13:23:14.759563+00:00'
+title: "OpenWiki: AI 에이전트를 위한 자동 위키 구축 TypeScript CLI 도구"
+source_url: "https://m.youtube.com/watch?v=-fuM7l81v-k&pp=ugUEEgJrbw%3D%3D&ra=m"
+tags: ["OpenWiki", "에이전트 위키", "문서 자동화", "TypeScript CLI", "LLM", "커넥터", "개인 지식 관리", "CI/CD", "코드베이스 문서화", "SHA 캐시"]
+summarized_at: "2026-07-20T13:23:14.759563+00:00"
 ---
 
 ## OpenWiki 개요

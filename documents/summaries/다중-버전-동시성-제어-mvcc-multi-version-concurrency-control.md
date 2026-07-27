@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 다중 버전 동시성 제어 (MVCC, Multi Version Concurrency Control)
-source_url: https://m.youtube.com/watch?v=xhZ6qJjC6Qk&pp=ygUETXZjYw%3D%3D&ra=m
-tags:
-- MVCC
-- 다중 버전 동시성 제어
-- 동시성 제어
-- 트랜잭션
-- 타임스탬프
-- SCN
-- 언두 영역
-- CR카피
-- 데이터베이스
-- 락
-summarized_at: '2026-07-20T13:20:39.769024+00:00'
+title: "다중 버전 동시성 제어 (MVCC, Multi Version Concurrency Control)"
+source_url: "https://m.youtube.com/watch?v=xhZ6qJjC6Qk&pp=ygUETXZjYw%3D%3D&ra=m"
+tags: ["MVCC", "다중 버전 동시성 제어", "동시성 제어", "트랜잭션", "타임스탬프", "SCN", "언두 영역", "CR카피", "데이터베이스", "락"]
+summarized_at: "2026-07-20T13:20:39.769024+00:00"
 ---
 
 ## 동시성 문제와 전통적 해결책 — 락(Lock)

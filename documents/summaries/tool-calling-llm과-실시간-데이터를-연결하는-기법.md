@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 'Tool Calling: LLM과 실시간 데이터를 연결하는 기법'
-source_url: https://m.youtube.com/watch?v=h8gMhXYAv1k&pp=ygUQbGxtIHRvb2wgY2FsbGluZw%3D%3D&ra=m
-tags:
-- Tool Calling
-- Embedded Tool Calling
-- LLM
-- hallucination
-- API
-- 도구 정의
-- 라이브러리
-- 실시간 데이터
-- AI
-- IBM Technology
-summarized_at: '2026-07-15T14:29:07.623970+00:00'
+title: "Tool Calling: LLM과 실시간 데이터를 연결하는 기법"
+source_url: "https://m.youtube.com/watch?v=h8gMhXYAv1k&pp=ygUQbGxtIHRvb2wgY2FsbGluZw%3D%3D&ra=m"
+tags: ["Tool Calling", "Embedded Tool Calling", "LLM", "hallucination", "API", "도구 정의", "라이브러리", "실시간 데이터", "AI", "IBM Technology"]
+summarized_at: "2026-07-15T14:29:07.623970+00:00"
 ---
 
 ## Tool Calling 개요

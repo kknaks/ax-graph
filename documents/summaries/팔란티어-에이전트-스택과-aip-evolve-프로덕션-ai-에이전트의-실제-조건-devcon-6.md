@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 팔란티어 에이전트 스택과 AIP Evolve — 프로덕션 AI 에이전트의 실제 조건(DevCon 6)
-source_url: https://www.youtube.com/watch?app=desktop&v=LbC2YC4YYGg
-tags:
-- 팔란티어
-- DevCon 6
-- 에이전트 스택
-- AIP Evolve
-- 프로덕션 에이전트
-- 온톨로지
-- 미션 크리티컬
-- AI 최적화
-- 탬파 병원
-- 결정론적 함수
-summarized_at: '2026-07-18T04:53:50.203441+00:00'
+title: "팔란티어 에이전트 스택과 AIP Evolve — 프로덕션 AI 에이전트의 실제 조건(DevCon 6)"
+source_url: "https://www.youtube.com/watch?app=desktop&v=LbC2YC4YYGg"
+tags: ["팔란티어", "DevCon 6", "에이전트 스택", "AIP Evolve", "프로덕션 에이전트", "온톨로지", "미션 크리티컬", "AI 최적화", "탬파 병원", "결정론적 함수"]
+summarized_at: "2026-07-18T04:53:50.203441+00:00"
 ---
 
 ## 데모 에이전트 vs. 프로덕션 에이전트

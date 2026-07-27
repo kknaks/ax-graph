@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 'Loop Engineering Explained: 자율 AI 에이전트 루프 설계 원칙'
-source_url: https://youtu.be/DQq-z4wROTc
-tags:
-- 루프 엔지니어링
-- Loop Engineering
-- Claude Code
-- 자율 에이전트
-- AI 에이전트
-- 버파이어
-- 제너레이터
-- MCP
-- 보상 함수
-- 프롬프트 엔지니어링
-summarized_at: '2026-07-10T11:55:28.001525+00:00'
+title: "Loop Engineering Explained: 자율 AI 에이전트 루프 설계 원칙"
+source_url: "https://youtu.be/DQq-z4wROTc"
+tags: ["루프 엔지니어링", "Loop Engineering", "Claude Code", "자율 에이전트", "AI 에이전트", "버파이어", "제너레이터", "MCP", "보상 함수", "프롬프트 엔지니어링"]
+summarized_at: "2026-07-10T11:55:28.001525+00:00"
 ---
 
 ## 도입: 프롬프트 시대의 종말

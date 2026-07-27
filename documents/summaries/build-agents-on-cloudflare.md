@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Build Agents on Cloudflare
-source_url: https://developers.cloudflare.com/agents/
-tags:
-- Cloudflare Agents
-- Agents SDK
-- durable agent
-- MCP
-- Workers AI
-- 에이전트 런타임
-- 브라우저 자동화
-- 스케줄링
-- WebSocket
-- human-in-the-loop
-summarized_at: '2026-07-10T11:54:52.691231+00:00'
+title: "Build Agents on Cloudflare"
+source_url: "https://developers.cloudflare.com/agents/"
+tags: ["Cloudflare Agents", "Agents SDK", "durable agent", "MCP", "Workers AI", "에이전트 런타임", "브라우저 자동화", "스케줄링", "WebSocket", "human-in-the-loop"]
+summarized_at: "2026-07-10T11:54:52.691231+00:00"
 ---
 
 ## 개요

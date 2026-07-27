@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 클로드 코드 × 옵시디언 × LLM Wiki × Graphify로 AI 세컨드 브레인 구축하기
-source_url: https://www.youtube.com/watch?v=cNlvrU-KcRg
-tags:
-- LLM Wiki
-- 클로드 코드
-- 옵시디언
-- Graphify
-- 세컨드 브레인
-- RAG
-- 지식 그래프
-- 인제스트
-- 웹 클리퍼
-- 목적성 수집
-summarized_at: '2026-07-13T04:13:42.239764+00:00'
+title: "클로드 코드 × 옵시디언 × LLM Wiki × Graphify로 AI 세컨드 브레인 구축하기"
+source_url: "https://www.youtube.com/watch?v=cNlvrU-KcRg"
+tags: ["LLM Wiki", "클로드 코드", "옵시디언", "Graphify", "세컨드 브레인", "RAG", "지식 그래프", "인제스트", "웹 클리퍼", "목적성 수집"]
+summarized_at: "2026-07-13T04:13:42.239764+00:00"
 ---
 
 ## 문제 공감 — CLAUDE.md만으로는 부족한 이유

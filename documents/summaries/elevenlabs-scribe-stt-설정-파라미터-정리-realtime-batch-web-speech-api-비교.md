@@ -1,19 +1,9 @@
 ---
 type: summary
-title: ElevenLabs Scribe STT 설정·파라미터 정리 — Realtime / Batch / Web Speech API 비교
+title: "ElevenLabs Scribe STT 설정·파라미터 정리 — Realtime / Batch / Web Speech API 비교"
 source_url: null
-tags:
-- ElevenLabs Scribe
-- STT
-- 음성인식
-- 회의 전사
-- 화자분리
-- VAD
-- WebSocket
-- 배치 전사
-- Web Speech API
-- Google Cloud STT
-summarized_at: '2026-07-25T13:27:39.045809+00:00'
+tags: ["ElevenLabs Scribe", "STT", "음성인식", "회의 전사", "화자분리", "VAD", "WebSocket", "배치 전사", "Web Speech API", "Google Cloud STT"]
+summarized_at: "2026-07-25T13:27:39.045809+00:00"
 ---
 
 ## 개요

@@ -1,19 +1,9 @@
 ---
 type: summary
-title: '인공지능 전환(AX) 시대: AX 개념·글로벌 사례·성숙도 모델·핵심 전략 요소 총정리'
-source_url: https://youtu.be/ErviFf8I6K4
-tags:
-- AX
-- AI Transformation
-- 디지털전환
-- 에이전틱AI
-- AI성숙도모델
-- 데이터거버넌스
-- 초개인화
-- AI전략
-- 글로벌사례
-- 조직변화관리
-summarized_at: '2026-07-10T07:42:21.821896+00:00'
+title: "인공지능 전환(AX) 시대: AX 개념·글로벌 사례·성숙도 모델·핵심 전략 요소 총정리"
+source_url: "https://youtu.be/ErviFf8I6K4"
+tags: ["AX", "AI Transformation", "디지털전환", "에이전틱AI", "AI성숙도모델", "데이터거버넌스", "초개인화", "AI전략", "글로벌사례", "조직변화관리"]
+summarized_at: "2026-07-10T07:42:21.821896+00:00"
 ---
 
 ## 강사 소개 및 챕터 개요

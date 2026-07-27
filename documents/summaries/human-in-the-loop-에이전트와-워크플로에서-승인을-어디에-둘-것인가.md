@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 'Human-in-the-Loop: 에이전트와 워크플로에서 승인을 어디에 둘 것인가'
-source_url: https://mastra.ai/blog/hitl-where-to-put-approval-in-agents-and-workflows
-tags:
-- Human-in-the-Loop
-- HITL
-- Mastra
-- 에이전트
-- 워크플로
-- 승인 패턴
-- tool call
-- suspend
-- createStep
-- agentic application
-summarized_at: '2026-07-10T07:44:10.445728+00:00'
+title: "Human-in-the-Loop: 에이전트와 워크플로에서 승인을 어디에 둘 것인가"
+source_url: "https://mastra.ai/blog/hitl-where-to-put-approval-in-agents-and-workflows"
+tags: ["Human-in-the-Loop", "HITL", "Mastra", "에이전트", "워크플로", "승인 패턴", "tool call", "suspend", "createStep", "agentic application"]
+summarized_at: "2026-07-10T07:44:10.445728+00:00"
 ---
 
 ## 개요

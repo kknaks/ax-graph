@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Controller, Service, Repository는 왜 나눌까요? — 관심사 분리와 계층형 아키텍처
-source_url: https://m.youtube.com/watch?v=3OLhaiv0cmQ&pp=ygUh65287Jqw7YSwIOyEnOu5hOyKpCDroIjtj6wg6rWs67O0&ra=m
-tags:
-- 관심사 분리
-- 계층형 아키텍처
-- Controller
-- Service
-- Repository
-- DTO
-- 의존성 방향
-- 안티패턴
-- Spring
-- 도메인 객체
-summarized_at: '2026-07-20T13:22:22.300070+00:00'
+title: "Controller, Service, Repository는 왜 나눌까요? — 관심사 분리와 계층형 아키텍처"
+source_url: "https://m.youtube.com/watch?v=3OLhaiv0cmQ&pp=ygUh65287Jqw7YSwIOyEnOu5hOyKpCDroIjtj6wg6rWs67O0&ra=m"
+tags: ["관심사 분리", "계층형 아키텍처", "Controller", "Service", "Repository", "DTO", "의존성 방향", "안티패턴", "Spring", "도메인 객체"]
+summarized_at: "2026-07-20T13:22:22.300070+00:00"
 ---
 
 ## 도입 — 식당 비유

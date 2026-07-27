@@ -1,16 +1,9 @@
 ---
 type: baseline
-title: SC 국내사업부 AI 기능 요구사항 목록
-aliases:
-- SC 국내사업부 요구사항
-- SC AI 기능 요구
-tags:
-- sc
-- 국내사업부
-- ai-요구사항
-- 의료마케팅
-up:
-- sc
+title: "SC 국내사업부 AI 기능 요구사항 목록"
+aliases: ["SC 국내사업부 요구사항", "SC AI 기능 요구"]
+tags: ["sc", "국내사업부", "ai-요구사항", "의료마케팅"]
+up: ["sc"]
 ---
 
 # SC 국내사업부 AI 기능 요구사항 목록

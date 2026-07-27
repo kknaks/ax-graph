@@ -1,19 +1,9 @@
 ---
 type: summary
-title: ReAct 루프 직접 구현 — LangChain @tool로 사내 업무 자동화 실습
-source_url: https://m.youtube.com/watch?v=OqSiCQKT1nU&ra=m
-tags:
-- LangChain
-- '@tool 데코레이터'
-- ReAct 패턴
-- bind_tools
-- tool_calls
-- Tavily
-- 사내 자동화
-- 수동 툴콜링
-- 에이전트
-- 도구 호출
-summarized_at: '2026-07-15T23:23:21.555764+00:00'
+title: "ReAct 루프 직접 구현 — LangChain @tool로 사내 업무 자동화 실습"
+source_url: "https://m.youtube.com/watch?v=OqSiCQKT1nU&ra=m"
+tags: ["LangChain", "@tool 데코레이터", "ReAct 패턴", "bind_tools", "tool_calls", "Tavily", "사내 자동화", "수동 툴콜링", "에이전트", "도구 호출"]
+summarized_at: "2026-07-15T23:23:21.555764+00:00"
 ---
 
 ## 핵심 개념 — LLM과 도구의 관계

@@ -1,19 +1,9 @@
 ---
 type: summary
-title: OpenAI Agents SDK — Human-in-the-Loop 승인 흐름 가이드
-source_url: https://openai.github.io/openai-agents-js/guides/human-in-the-loop/
-tags:
-- human-in-the-loop
-- OpenAI Agents SDK
-- interruptions
-- RunState
-- needsApproval
-- tool approval
-- agent.asTool
-- serialization
-- streaming
-- handoff
-summarized_at: '2026-07-10T12:01:35.865056+00:00'
+title: "OpenAI Agents SDK — Human-in-the-Loop 승인 흐름 가이드"
+source_url: "https://openai.github.io/openai-agents-js/guides/human-in-the-loop/"
+tags: ["human-in-the-loop", "OpenAI Agents SDK", "interruptions", "RunState", "needsApproval", "tool approval", "agent.asTool", "serialization", "streaming", "handoff"]
+summarized_at: "2026-07-10T12:01:35.865056+00:00"
 ---
 
 ## 개요

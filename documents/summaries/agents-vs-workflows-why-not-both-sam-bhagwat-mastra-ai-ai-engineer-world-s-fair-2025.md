@@ -1,20 +1,9 @@
 ---
 type: summary
-title: 'Agents vs Workflows: Why Not Both? — Sam Bhagwat (Mastra.ai) @ AI Engineer
-  World''s Fair 2025'
-source_url: https://youtu.be/8SUJEqQNClw
-tags:
-- agent
-- workflow
-- Mastra.ai
-- AI engineering
-- composition
-- design patterns
-- LLM orchestration
-- graph API
-- fluent syntax
-- agentic patterns
-summarized_at: '2026-07-10T07:43:28.045825+00:00'
+title: "Agents vs Workflows: Why Not Both? — Sam Bhagwat (Mastra.ai) @ AI Engineer World's Fair 2025"
+source_url: "https://youtu.be/8SUJEqQNClw"
+tags: ["agent", "workflow", "Mastra.ai", "AI engineering", "composition", "design patterns", "LLM orchestration", "graph API", "fluent syntax", "agentic patterns"]
+summarized_at: "2026-07-10T07:43:28.045825+00:00"
 ---
 
 ## 발표 배경 및 논쟁 소개

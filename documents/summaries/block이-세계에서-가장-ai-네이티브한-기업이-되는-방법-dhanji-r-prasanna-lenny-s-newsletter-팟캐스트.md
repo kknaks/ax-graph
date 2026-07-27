@@ -1,20 +1,9 @@
 ---
 type: summary
-title: Block이 세계에서 가장 AI 네이티브한 기업이 되는 방법 | Dhanji R. Prasanna (Lenny's Newsletter
-  팟캐스트)
-source_url: https://www.lennysnewsletter.com/p/how-block-is-becoming-the-most-ai-native
-tags:
-- Block
-- AI네이티브
-- Dhanji Prasanna
-- Goose
-- AI생산성
-- CTO
-- 팟캐스트
-- 페이월
-- Square
-- AI도입
-summarized_at: '2026-07-10T11:53:27.953303+00:00'
+title: "Block이 세계에서 가장 AI 네이티브한 기업이 되는 방법 | Dhanji R. Prasanna (Lenny's Newsletter 팟캐스트)"
+source_url: "https://www.lennysnewsletter.com/p/how-block-is-becoming-the-most-ai-native"
+tags: ["Block", "AI네이티브", "Dhanji Prasanna", "Goose", "AI생산성", "CTO", "팟캐스트", "페이월", "Square", "AI도입"]
+summarized_at: "2026-07-10T11:53:27.953303+00:00"
 ---
 
 ## 에피소드 개요

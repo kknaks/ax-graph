@@ -1,19 +1,9 @@
 ---
 type: summary
-title: VoltAgent 빠른 시작 데모 — AI 에이전트·워크플로우 구축 및 VoltOps 모니터링
-source_url: https://www.youtube.com/watch?v=4v1ZFACsiRs
-tags:
-- VoltAgent
-- VoltOps
-- AI 에이전트
-- 워크플로우
-- Human-in-the-Loop
-- TypeScript
-- LLM 옵저버빌리티
-- suspend/resume
-- OpenAI
-- 프로덕션 모니터링
-summarized_at: '2026-07-13T01:13:57.380798+00:00'
+title: "VoltAgent 빠른 시작 데모 — AI 에이전트·워크플로우 구축 및 VoltOps 모니터링"
+source_url: "https://www.youtube.com/watch?v=4v1ZFACsiRs"
+tags: ["VoltAgent", "VoltOps", "AI 에이전트", "워크플로우", "Human-in-the-Loop", "TypeScript", "LLM 옵저버빌리티", "suspend/resume", "OpenAI", "프로덕션 모니터링"]
+summarized_at: "2026-07-13T01:13:57.380798+00:00"
 ---
 
 ## 소개

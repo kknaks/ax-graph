@@ -1,15 +1,9 @@
 ---
 type: baseline
-title: SC 글로벌 AI 관련 의견
-aliases:
-- SC 글로벌팀 AI 요구사항
-- TheSC AI 요구
-tags:
-- sc
-- ai
-- 요구사항
-up:
-- sc
+title: "SC 글로벌 AI 관련 의견"
+aliases: ["SC 글로벌팀 AI 요구사항", "TheSC AI 요구"]
+tags: ["sc", "ai", "요구사항"]
+up: ["sc"]
 ---
 
 # SC 글로벌 AI 관련 의견

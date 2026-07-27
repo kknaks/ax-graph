@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 'SkillOpt: AI 에이전트 스킬을 훈련 가능한 파라미터로 만드는 프레임워크'
-source_url: https://www.microsoft.com/en-us/research/blog/skillopt-agent-skills-as-trainable-parameters/
-tags:
-- SkillOpt
-- AI agent
-- skill optimization
-- trainable parameters
-- LLM
-- prompt optimization
-- agent skills
-- transfer learning
-- benchmark
-- Microsoft Research
-summarized_at: '2026-07-13T04:35:25.877683+00:00'
+title: "SkillOpt: AI 에이전트 스킬을 훈련 가능한 파라미터로 만드는 프레임워크"
+source_url: "https://www.microsoft.com/en-us/research/blog/skillopt-agent-skills-as-trainable-parameters/"
+tags: ["SkillOpt", "AI agent", "skill optimization", "trainable parameters", "LLM", "prompt optimization", "agent skills", "transfer learning", "benchmark", "Microsoft Research"]
+summarized_at: "2026-07-13T04:35:25.877683+00:00"
 ---
 
 ## 개요 및 문제 제기

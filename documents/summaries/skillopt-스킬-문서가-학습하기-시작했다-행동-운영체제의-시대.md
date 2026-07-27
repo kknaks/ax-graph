@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 'SkillOpt: 스킬 문서가 학습하기 시작했다 — 행동 운영체제의 시대'
-source_url: https://blog.pebblous.ai/report/microsoft-skillopt-self-evolving-agents/ko/
-tags:
-- SkillOpt
-- 자기진화 에이전트
-- 스킬 문서
-- 에이전트 최적화
-- Microsoft Research
-- 텍스트 공간 학습
-- 행동 자산
-- 크로스모델 전이
-- AI-Ready Behavior
-- 에이전트 거버넌스
-summarized_at: '2026-07-13T04:36:32.570466+00:00'
+title: "SkillOpt: 스킬 문서가 학습하기 시작했다 — 행동 운영체제의 시대"
+source_url: "https://blog.pebblous.ai/report/microsoft-skillopt-self-evolving-agents/ko/"
+tags: ["SkillOpt", "자기진화 에이전트", "스킬 문서", "에이전트 최적화", "Microsoft Research", "텍스트 공간 학습", "행동 자산", "크로스모델 전이", "AI-Ready Behavior", "에이전트 거버넌스"]
+summarized_at: "2026-07-13T04:36:32.570466+00:00"
 ---
 
 ## Executive Summary

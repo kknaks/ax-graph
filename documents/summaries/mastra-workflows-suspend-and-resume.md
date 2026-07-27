@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Mastra Workflows — Suspend and Resume
-source_url: https://mastra.ai/docs/workflows/suspend-and-resume
-tags:
-- Mastra
-- workflow
-- suspend
-- resume
-- human-in-the-loop
-- snapshot
-- resumeData
-- suspendData
-- createWorkflowStateReader
-- sleep
-summarized_at: '2026-07-10T11:58:57.251013+00:00'
+title: "Mastra Workflows — Suspend and Resume"
+source_url: "https://mastra.ai/docs/workflows/suspend-and-resume"
+tags: ["Mastra", "workflow", "suspend", "resume", "human-in-the-loop", "snapshot", "resumeData", "suspendData", "createWorkflowStateReader", "sleep"]
+summarized_at: "2026-07-10T11:58:57.251013+00:00"
 ---
 
 ## 개요

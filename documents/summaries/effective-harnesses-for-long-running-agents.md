@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Effective Harnesses for Long-Running Agents
-source_url: https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents
-tags:
-- long-running agents
-- context window
-- agent harness
-- Claude Agent SDK
-- initializer agent
-- coding agent
-- incremental progress
-- git
-- feature list
-- browser automation
-summarized_at: '2026-07-10T11:57:42.067012+00:00'
+title: "Effective Harnesses for Long-Running Agents"
+source_url: "https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents"
+tags: ["long-running agents", "context window", "agent harness", "Claude Agent SDK", "initializer agent", "coding agent", "incremental progress", "git", "feature list", "browser automation"]
+summarized_at: "2026-07-10T11:57:42.067012+00:00"
 ---
 
 ## 문제 배경

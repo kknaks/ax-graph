@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 아키텍트가 알아야 할 DB 커넥션 풀 사이징 기본과 함정
-source_url: https://m.youtube.com/watch?v=uhMhv8yGAyM&pp=ugUEEgJrbw%3D%3D&ra=m
-tags:
-- DB 커넥션 풀
-- HikariCP
-- 풀 사이징
-- 리틀의 법칙
-- TPS
-- PostgreSQL
-- USL
-- 롱 트랜잭션
-- PgBouncer
-- 성능 튜닝
-summarized_at: '2026-07-23T00:09:14.917492+00:00'
+title: "아키텍트가 알아야 할 DB 커넥션 풀 사이징 기본과 함정"
+source_url: "https://m.youtube.com/watch?v=uhMhv8yGAyM&pp=ugUEEgJrbw%3D%3D&ra=m"
+tags: ["DB 커넥션 풀", "HikariCP", "풀 사이징", "리틀의 법칙", "TPS", "PostgreSQL", "USL", "롱 트랜잭션", "PgBouncer", "성능 튜닝"]
+summarized_at: "2026-07-23T00:09:14.917492+00:00"
 ---
 
 ## DB 커넥션 풀 개요

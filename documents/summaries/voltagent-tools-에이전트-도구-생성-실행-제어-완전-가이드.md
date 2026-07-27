@@ -1,19 +1,9 @@
 ---
 type: summary
-title: VoltAgent Tools — 에이전트 도구 생성·실행·제어 완전 가이드
-source_url: https://voltagent.dev/docs/agents/tools/
-tags:
-- VoltAgent
-- createTool
-- Tool Hooks
-- needsApproval
-- AbortController
-- MCP
-- client-side tools
-- streaming tool
-- ToolDeniedError
-- multimodal
-summarized_at: '2026-07-10T11:59:00.777195+00:00'
+title: "VoltAgent Tools — 에이전트 도구 생성·실행·제어 완전 가이드"
+source_url: "https://voltagent.dev/docs/agents/tools/"
+tags: ["VoltAgent", "createTool", "Tool Hooks", "needsApproval", "AbortController", "MCP", "client-side tools", "streaming tool", "ToolDeniedError", "multimodal"]
+summarized_at: "2026-07-10T11:59:00.777195+00:00"
 ---
 
 ## 도구(Tool) 개요

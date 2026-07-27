@@ -1,19 +1,9 @@
 ---
 type: summary
-title: Global Interpreter Lock(GIL) 자세히 톺아보기 — CPython 내부 구조·성능·미래 동향
-source_url: https://m.youtube.com/watch?v=hj8BnSAalEs&pp=ygUN7YyM7J207I2sIGdpbA%3D%3D&ra=m
-tags:
-- GIL
-- CPython
-- Reference Counting
-- Race Condition
-- Mutex Lock
-- Atomic Operator
-- nogil
-- 멀티스레딩
-- IO Bound
-- CPU Bound
-summarized_at: '2026-07-15T13:41:58.926375+00:00'
+title: "Global Interpreter Lock(GIL) 자세히 톺아보기 — CPython 내부 구조·성능·미래 동향"
+source_url: "https://m.youtube.com/watch?v=hj8BnSAalEs&pp=ygUN7YyM7J207I2sIGdpbA%3D%3D&ra=m"
+tags: ["GIL", "CPython", "Reference Counting", "Race Condition", "Mutex Lock", "Atomic Operator", "nogil", "멀티스레딩", "IO Bound", "CPU Bound"]
+summarized_at: "2026-07-15T13:41:58.926375+00:00"
 ---
 
 ## 발표 개요

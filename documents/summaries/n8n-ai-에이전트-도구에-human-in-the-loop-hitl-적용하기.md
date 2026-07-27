@@ -1,19 +1,9 @@
 ---
 type: summary
-title: n8n AI 에이전트 도구에 Human-in-the-loop(HITL) 적용하기
-source_url: https://docs.n8n.io/advanced-ai/human-in-the-loop-tools/
-tags:
-- n8n
-- Human-in-the-loop
-- HITL
-- AI Agent
-- tool approval
-- workflow automation
-- Slack approval
-- $fromAI
-- $tool
-- AI oversight
-summarized_at: '2026-07-10T12:00:34.657626+00:00'
+title: "n8n AI 에이전트 도구에 Human-in-the-loop(HITL) 적용하기"
+source_url: "https://docs.n8n.io/advanced-ai/human-in-the-loop-tools/"
+tags: ["n8n", "Human-in-the-loop", "HITL", "AI Agent", "tool approval", "workflow automation", "Slack approval", "$fromAI", "$tool", "AI oversight"]
+summarized_at: "2026-07-10T12:00:34.657626+00:00"
 ---
 
 ## 개요

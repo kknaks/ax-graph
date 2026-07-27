@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 알아두면 좋은 디자인 패턴 (Design Pattern) — 스프링 부트 기초
-source_url: https://www.youtube.com/watch?v=Mq4MwPXWarI
-tags:
-- 디자인 패턴
-- GoF
-- 싱글톤
-- 생성 패턴
-- 구조 패턴
-- 행동 패턴
-- 스프링 부트
-- 팩토리
-- 객체지향
-- 소프트웨어 설계
-summarized_at: '2026-07-14T05:18:59.949463+00:00'
+title: "알아두면 좋은 디자인 패턴 (Design Pattern) — 스프링 부트 기초"
+source_url: "https://www.youtube.com/watch?v=Mq4MwPXWarI"
+tags: ["디자인 패턴", "GoF", "싱글톤", "생성 패턴", "구조 패턴", "행동 패턴", "스프링 부트", "팩토리", "객체지향", "소프트웨어 설계"]
+summarized_at: "2026-07-14T05:18:59.949463+00:00"
 ---
 
 ## 디자인 패턴이란

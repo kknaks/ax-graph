@@ -1,19 +1,9 @@
 ---
 type: summary
-title: AX가 회사에서 체감되지 않는 이유 — 버티컬 워크플로우 연결의 중요성
-source_url: https://www.youtube.com/watch?v=pnn4QZU2TnA
-tags:
-- AX
-- AI전환
-- 업무자동화
-- 버티컬워크플로우
-- AX효능감
-- 조직전체
-- 보고자동화
-- 의사결정지원
-- DX
-- 경영진실무자
-summarized_at: '2026-07-10T07:53:04.880635+00:00'
+title: "AX가 회사에서 체감되지 않는 이유 — 버티컬 워크플로우 연결의 중요성"
+source_url: "https://www.youtube.com/watch?v=pnn4QZU2TnA"
+tags: ["AX", "AI전환", "업무자동화", "버티컬워크플로우", "AX효능감", "조직전체", "보고자동화", "의사결정지원", "DX", "경영진실무자"]
+summarized_at: "2026-07-10T07:53:04.880635+00:00"
 ---
 
 ## AX 효능감 문제 제기

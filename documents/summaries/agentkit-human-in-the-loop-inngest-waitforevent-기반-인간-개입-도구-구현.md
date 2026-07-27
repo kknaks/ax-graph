@@ -1,19 +1,9 @@
 ---
 type: summary
-title: AgentKit Human in the Loop — Inngest waitForEvent 기반 인간 개입 도구 구현
-source_url: https://agentkit.inngest.com/advanced-patterns/human-in-the-loop
-tags:
-- AgentKit
-- Inngest
-- Human in the Loop
-- waitForEvent
-- 에이전트 네트워크
-- createTool
-- Support Agent
-- step context
-- 이벤트 매칭
-- 워크플로우 자동화
-summarized_at: '2026-07-10T12:00:30.628180+00:00'
+title: "AgentKit Human in the Loop — Inngest waitForEvent 기반 인간 개입 도구 구현"
+source_url: "https://agentkit.inngest.com/advanced-patterns/human-in-the-loop"
+tags: ["AgentKit", "Inngest", "Human in the Loop", "waitForEvent", "에이전트 네트워크", "createTool", "Support Agent", "step context", "이벤트 매칭", "워크플로우 자동화"]
+summarized_at: "2026-07-10T12:00:30.628180+00:00"
 ---
 
 ## Human in the Loop 개요

@@ -1,19 +1,9 @@
 ---
 type: summary
-title: 'AI 네이티브 기업에서 배워라: 뒤처지지 않으려면'
-source_url: https://www.microsoft.com/en-us/worklab/learn-from-ai-native-firms-or-get-left-behind
-tags:
-- AI 네이티브
-- Jared Spataro
-- Microsoft
-- AI at Work
-- AI 협업
-- 관리자 역할 변화
-- AI 도입 전략
-- 인간-AI 협업
-- 비즈니스 혁신
-- The Atlantic Festival
-summarized_at: '2026-07-10T11:53:14.821256+00:00'
+title: "AI 네이티브 기업에서 배워라: 뒤처지지 않으려면"
+source_url: "https://www.microsoft.com/en-us/worklab/learn-from-ai-native-firms-or-get-left-behind"
+tags: ["AI 네이티브", "Jared Spataro", "Microsoft", "AI at Work", "AI 협업", "관리자 역할 변화", "AI 도입 전략", "인간-AI 협업", "비즈니스 혁신", "The Atlantic Festival"]
+summarized_at: "2026-07-10T11:53:14.821256+00:00"
 ---
 
 ## 배경

@@ -1,19 +1,9 @@
 ---
 type: summary
-title: VoltOps Slack Trigger 설정 가이드
-source_url: https://voltagent.dev/docs/triggers/slack/
-tags:
-- Slack Trigger
-- VoltOps
-- Events API
-- webhook
-- Slack app
-- bot token
-- signing secret
-- event subscriptions
-- agent
-- integration
-summarized_at: '2026-07-11T03:08:55.695014+00:00'
+title: "VoltOps Slack Trigger 설정 가이드"
+source_url: "https://voltagent.dev/docs/triggers/slack/"
+tags: ["Slack Trigger", "VoltOps", "Events API", "webhook", "Slack app", "bot token", "signing secret", "event subscriptions", "agent", "integration"]
+summarized_at: "2026-07-11T03:08:55.695014+00:00"
 ---
 
 ## 개요
