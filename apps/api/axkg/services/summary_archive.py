@@ -13,9 +13,8 @@ revision(T-012 `sources.active_summary_revision_id`) payload를 `data/documents/
 """
 from __future__ import annotations
 
+import json
 import re
-
-import yaml
 
 from axkg.dto.source import SourceDTO, SourceSummaryRevisionDTO
 from axkg.storage.markdown_root import SUMMARIES_SUBDIR, MarkdownRoot
@@ -30,6 +29,31 @@ def slugify(title: str) -> str:
     text = re.sub(r"[^\w\-]+", "-", text, flags=re.UNICODE)
     text = re.sub(r"-+", "-", text).strip("-_")
     return text or "summary"
+
+
+def _dump_frontmatter(front: dict[str, object]) -> str:
+    """정본 frontmatter 직렬화 — 리스트는 inline flow, 문자열 스칼라는 큰따옴표.
+
+    `yaml.safe_dump`는 리스트를 들여쓰기 없는 block list(`tags:\\n- item`)로 내는데,
+    문서함의 경량 파서(apps/web/lib/frontmatter.ts)가 이를 리스트로 인식하지 못해
+    tags가 통째로 비어 보인다. 그래서 직렬화를 직접 고정한다.
+
+    - `type`은 enum이라 bareword, `None`은 `null`, 나머지 스칼라는 큰따옴표.
+    - 큰따옴표 유지가 중요한 이유: `summarized_at`을 따옴표 없이 내면 YAML이 datetime으로
+      파싱해 문자열 타입이 바뀐다.
+    """
+    lines: list[str] = []
+    for key, value in front.items():
+        if isinstance(value, list):
+            items = ", ".join(json.dumps(str(v), ensure_ascii=False) for v in value)
+            lines.append(f"{key}: [{items}]")
+        elif value is None:
+            lines.append(f"{key}: null")
+        elif key == "type":
+            lines.append(f"{key}: {value}")
+        else:
+            lines.append(f"{key}: {json.dumps(str(value), ensure_ascii=False)}")
+    return "\n".join(lines)
 
 
 def build_summary_markdown(
@@ -52,7 +76,7 @@ def build_summary_markdown(
         "tags": keywords,
         "summarized_at": revision.created_at.isoformat(),
     }
-    front_yaml = yaml.safe_dump(front, allow_unicode=True, sort_keys=False).strip()
+    front_yaml = _dump_frontmatter(front)
     return f"---\n{front_yaml}\n---\n\n{body}\n"
 
 
