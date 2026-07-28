@@ -7,7 +7,7 @@ up: ["sc-통합업무관리시스템-원본요약"]
 feature_id: "sc-F-20"
 corp: "sc"
 status: draft
-priority: "mid"
+priority: mid
 ---
 
 # 레퍼런스보관함

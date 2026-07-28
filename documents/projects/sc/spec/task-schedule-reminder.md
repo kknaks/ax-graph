@@ -7,7 +7,7 @@ up: ["sc-원본요약"]
 feature_id: "sc-F-03"
 corp: "sc"
 status: draft
-priority: "mid"
+priority: mid
 ---
 
 # 미션 일정 관리

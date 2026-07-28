@@ -7,7 +7,7 @@ up: ["sc-통합업무관리시스템-원본요약"]
 feature_id: "sc-F-25"
 corp: "sc"
 status: draft
-priority: "high"
+priority: high
 ---
 
 # 보안·개인정보보호

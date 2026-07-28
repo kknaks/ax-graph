@@ -7,7 +7,7 @@ up: ["sc-원본요약"]
 feature_id: "sc-F-07"
 corp: "sc"
 status: draft
-priority: "mid"
+priority: mid
 ---
 
 # 의료 뉴스 요약

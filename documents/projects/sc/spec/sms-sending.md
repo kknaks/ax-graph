@@ -7,7 +7,7 @@ up: ["sc-원본요약"]
 feature_id: "sc-F-08"
 corp: "sc"
 status: draft
-priority: "mid"
+priority: mid
 ---
 
 # 문자 발송

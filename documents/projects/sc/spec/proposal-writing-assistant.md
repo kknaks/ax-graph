@@ -7,7 +7,7 @@ up: ["sc-원본요약"]
 feature_id: "sc-F-04"
 corp: "sc"
 status: draft
-priority: "mid"
+priority: mid
 ---
 
 # 제안서 작성 도우미
