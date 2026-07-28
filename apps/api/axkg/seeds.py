@@ -756,7 +756,7 @@ up: []                    # 계보 링크 — 회사 원본요약을 up으로
 feature_id: ""            # {corp}-F-NN
 corp: ""
 status: draft             # draft|reviewing|confirmed
-priority: ""              # high|mid|low
+priority: mid             # high|mid|low (enum — 큰따옴표 없이 bareword)
 ---
 
 # {기능명}
