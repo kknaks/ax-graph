@@ -55,6 +55,8 @@ DOCUMENT_TYPE = (
     "company",
     # 회사 배경지식 단일 문서 projects/{corp}/context/{문서}.md (AXKG-DEC-009/WORK-013).
     "context",
+    # 고객 제시용 제안서 projects/{corp}/proposal/{문서}.md. 기능 1:1이 아닌 프로젝트 단위 산출물.
+    "proposal",
     "decision",
     "spec",
     "work",

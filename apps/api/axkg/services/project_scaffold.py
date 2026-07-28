@@ -24,10 +24,16 @@ BASELINE = "baseline"
 SPEC = "spec"
 # 회사 배경지식(조직·업무 플로우 등) 단일 문서 층 (AXKG-DEC-009/WORK-013).
 CONTEXT = "context"
-CORP_SUBDIRS = (ORIGIN, BASELINE, SPEC, CONTEXT)
+# 고객 제시용 제안서 층 — 프로젝트 단위(기능 1:1 아님).
+PROPOSAL = "proposal"
+# 구현 상세 스펙 층 — spec(기능 요구서, WHAT)과 1:1로 대응하는 HOW.
+WORK = "work"
+CORP_SUBDIRS = (ORIGIN, BASELINE, SPEC, CONTEXT, PROPOSAL, WORK)
 # 회사 루트/context document_type (AXKG-DEC-009 — 신규 타입 기본).
 COMPANY_DOCUMENT_TYPE = "company"
 CONTEXT_DOCUMENT_TYPE = "context"
+PROPOSAL_DOCUMENT_TYPE = "proposal"
+WORK_DOCUMENT_TYPE = "work"
 # project 하위 sub-type (AXKG-DEC-009 D2).
 SUBTYPE_REQUIREMENT = "requirement"
 SUBTYPE_CONTEXT = "context"
@@ -80,6 +86,20 @@ def project_context_path(corp: str, filename: str) -> str:
     if not corp or not filename:
         return ""
     return f"{corp_subdir(corp, CONTEXT)}/{filename}"
+
+
+def project_proposal_path(corp: str, filename: str) -> str:
+    """제안서 경로 = projects/{corp}/proposal/{stem}.md. corp/파일명 없으면 ""."""
+    if not corp or not filename:
+        return ""
+    return f"{corp_subdir(corp, PROPOSAL)}/{filename}"
+
+
+def project_work_path(corp: str, filename: str) -> str:
+    """구현 상세 스펙 경로 = projects/{corp}/work/{stem}.md. corp/파일명 없으면 ""."""
+    if not corp or not filename:
+        return ""
+    return f"{corp_subdir(corp, WORK)}/{filename}"
 
 
 def company_root_path(corp: str) -> str:
